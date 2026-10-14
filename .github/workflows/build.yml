@@ -26,7 +26,22 @@ jobs:
           name: FixedClipboard
           path: FixedClipboard.exe
 
-      - name: Attach exe to release
+      - name: Publish release for new VERSION
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v$(tr -d ' \r\n' < VERSION)"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "$TAG 已发布过，跳过（发新版请修改 VERSION）"
+            exit 0
+          fi
+          7z a "FixedClipboard-$TAG.zip" FixedClipboard.exe
+          gh release create "$TAG" FixedClipboard.exe "FixedClipboard-$TAG.zip" \
+            --target "$GITHUB_SHA" --title "Starport 固定剪贴板 $TAG" --generate-notes
+
+      - name: Attach exe to manually created release
         if: github.event_name == 'release'
         shell: bash
         env:

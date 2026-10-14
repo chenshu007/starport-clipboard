@@ -15,7 +15,7 @@
 
 ## 下载
 
-到 [Releases](../../releases) 下载 `FixedClipboard.exe`，放进任意文件夹双击运行。
+到 [Releases](../../releases/latest) 下载 `FixedClipboard.exe`，放进任意文件夹双击运行。
 
 需要 .NET Framework 4.x，Windows 10/11 已自带。首次运行若被 SmartScreen 拦截，点「更多信息 → 仍要运行」。
 
@@ -37,4 +37,4 @@
 %WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /target:winexe /optimize+ /codepage:65001 /resource:logo.png,logo.png /out:FixedClipboard.exe /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll FixedClipboard.cs
 ```
 
-每次推送到 `main`，GitHub Actions 都会在 Windows 上编译一次；在 GitHub 上发布一个 Release（如 `v1.0.0`）后，会自动编译并把 exe 挂到这个 Release 上。
+每次推送到 `main`，GitHub Actions 都会在 Windows 上编译一次；修改 `VERSION` 文件里的版本号并推送，会自动发布对应的 Release（如 `v1.0.1`）。
