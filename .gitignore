@@ -1,0 +1,4 @@
+# 本地运行数据与编译产物
+phrases.txt
+*.exe
+*.zip
