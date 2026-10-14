@@ -3,7 +3,8 @@ name: build
 on:
   push:
     branches: [main]
-    tags: ['v*']
+  release:
+    types: [published]
   pull_request:
   workflow_dispatch:
 
@@ -25,12 +26,12 @@ jobs:
           name: FixedClipboard
           path: FixedClipboard.exe
 
-      - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Attach exe to release
+        if: github.event_name == 'release'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
         run: |
-          7z a FixedClipboard-${GITHUB_REF_NAME}.zip FixedClipboard.exe
-          gh release create "$GITHUB_REF_NAME" FixedClipboard.exe "FixedClipboard-${GITHUB_REF_NAME}.zip" \
-            --title "Starport 固定剪贴板 $GITHUB_REF_NAME" --generate-notes
+          7z a "FixedClipboard-$TAG.zip" FixedClipboard.exe
+          gh release upload "$TAG" FixedClipboard.exe "FixedClipboard-$TAG.zip" --clobber

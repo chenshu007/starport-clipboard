@@ -37,4 +37,4 @@
 %WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /target:winexe /optimize+ /codepage:65001 /resource:logo.png,logo.png /out:FixedClipboard.exe /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll FixedClipboard.cs
 ```
 
-每次推送到 `main`，GitHub Actions 都会在 Windows 上编译一次；推送 `v*` 标签（如 `v1.0.0`）会自动发布 Release。
+每次推送到 `main`，GitHub Actions 都会在 Windows 上编译一次；在 GitHub 上发布一个 Release（如 `v1.0.0`）后，会自动编译并把 exe 挂到这个 Release 上。
