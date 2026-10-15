@@ -529,7 +529,24 @@ class SettingsDialog : Form
         tSuffix.TextChanged += delegate { UpdatePreview(); };
         UpdatePreview();
 
-        Controls.AddRange(new Control[] { chk, l, tSuffix, preview, numCutoff, lc, lcEnd, lc2, ok, cancel });
+        // 底部：版本号 + 官网链接（点击用浏览器打开）
+        string ver = MainForm.ReadVersion();
+        string prefix = (ver.Length > 0 ? "v" + ver + " · " : "");
+        LinkLabel about = new LinkLabel();
+        about.Text = prefix + MainForm.Website;
+        about.LinkArea = new LinkArea(prefix.Length, MainForm.Website.Length);
+        about.LinkBehavior = LinkBehavior.HoverUnderline;
+        about.ForeColor = Theme.Muted;
+        about.LinkColor = Theme.Clay;
+        about.ActiveLinkColor = Theme.ClayDark;
+        about.SetBounds(20, 240, 300, 20);
+        about.LinkClicked += delegate
+        {
+            try { System.Diagnostics.Process.Start("https://" + MainForm.Website); }
+            catch { MessageBox.Show(this, "无法打开浏览器", "Starport", MessageBoxButtons.OK, MessageBoxIcon.Information); }
+        };
+
+        Controls.AddRange(new Control[] { chk, l, tSuffix, preview, numCutoff, lc, lcEnd, lc2, about, ok, cancel });
         AcceptButton = ok;
         CancelButton = cancel;
     }
@@ -931,7 +948,9 @@ class MainForm : Form
     }
 
     // 版本号来自编译时打包进 exe 的 VERSION 文件（见 build.bat 的 /resource:VERSION,version.txt）
-    static string ReadVersion()
+    public const string Website = "starport1116.com";
+
+    public static string ReadVersion()
     {
         try
         {
