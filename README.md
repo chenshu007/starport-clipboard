@@ -34,7 +34,7 @@
 不需要安装任何工具，Windows 自带的 C# 编译器就够了。把仓库下载到本地，双击 `build.bat`，或在 cmd 里运行：
 
 ```bat
-%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /target:winexe /optimize+ /codepage:65001 /resource:logo.png,logo.png /out:FixedClipboard.exe /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll FixedClipboard.cs
+%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /target:winexe /optimize+ /codepage:65001 /win32icon:app.ico /resource:logo.png,logo.png /out:FixedClipboard.exe /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll FixedClipboard.cs
 ```
 
 每次推送到 `main`，GitHub Actions 都会在 Windows 上编译一次；修改 `VERSION` 文件里的版本号并推送，会自动发布对应的 Release（如 `v1.0.1`）。

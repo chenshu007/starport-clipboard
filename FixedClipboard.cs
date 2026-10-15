@@ -367,7 +367,7 @@ class MainForm : Form
         Font = Theme.Small;
         BackColor = Theme.Bg;
         TopMost = true;
-        ShowInTaskbar = false;
+        ShowInTaskbar = true;  // 任务栏显示图标，被遮挡时可点任务栏找回
         FormBorderStyle = FormBorderStyle.FixedToolWindow;
         MaximizeBox = false;
         StartPosition = FormStartPosition.Manual;
