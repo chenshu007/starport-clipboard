@@ -529,12 +529,162 @@ class SettingsDialog : Form
     }
 }
 
+class ImageCard : Control
+{
+    public readonly Image Img;
+    public event Action<ImageCard> ViewRequested, DeleteRequested;
+
+    bool hover, delHover;
+
+    public ImageCard(Image img)
+    {
+        Img = img;
+        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
+                 ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+        SetStyle(ControlStyles.Selectable, false);
+        BackColor = Theme.Bg;
+        Cursor = Cursors.Hand;
+        Size = new Size(104, 78);
+    }
+
+    Rectangle DelRect { get { return new Rectangle(Width - 24, 4, 20, 20); } }
+
+    protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
+    protected override void OnMouseLeave(EventArgs e) { hover = false; delHover = false; Invalidate(); base.OnMouseLeave(e); }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        bool dh = DelRect.Contains(e.Location);
+        if (dh != delHover) { delHover = dh; Invalidate(); }
+        base.OnMouseMove(e);
+    }
+
+    protected override void OnMouseUp(MouseEventArgs e)
+    {
+        base.OnMouseUp(e);
+        if (e.Button != MouseButtons.Left) return;
+        if (!ClientRectangle.Contains(e.Location)) return;
+        if (DelRect.Contains(e.Location))
+        {
+            if (DeleteRequested != null) DeleteRequested(this);
+        }
+        else
+        {
+            if (ViewRequested != null) ViewRequested(this);
+        }
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        Graphics g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+        g.Clear(Theme.Bg);
+
+        RectangleF box = new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f);
+        using (GraphicsPath path = Theme.Round(box, 8))
+        {
+            using (SolidBrush b = new SolidBrush(Theme.Card)) g.FillPath(b, path);
+
+            Region oldClip = g.Clip;
+            g.SetClip(path, CombineMode.Intersect);
+            if (Img != null && Img.Width > 0 && Img.Height > 0)
+            {
+                float pad = 4f;
+                float availW = Width - pad * 2, availH = Height - pad * 2;
+                float scale = Math.Min(availW / Img.Width, availH / Img.Height);
+                float dw = Img.Width * scale, dh = Img.Height * scale;
+                float dx = (Width - dw) / 2f, dy = (Height - dh) / 2f;
+                g.DrawImage(Img, dx, dy, dw, dh);
+            }
+            g.Clip = oldClip;
+
+            using (Pen pen = new Pen(hover ? Theme.Clay : Theme.Line)) g.DrawPath(pen, path);
+        }
+
+        if (hover)
+        {
+            Rectangle r = DelRect;
+            using (GraphicsPath dp = Theme.Round(new RectangleF(r.X + 0.5f, r.Y + 0.5f, r.Width - 1f, r.Height - 1f), 9.5f))
+            using (SolidBrush db = new SolidBrush(delHover ? Color.Firebrick : Color.FromArgb(220, 255, 255, 255)))
+            using (Pen dpen = new Pen(delHover ? Color.Firebrick : Theme.Line))
+            {
+                g.FillPath(db, dp);
+                g.DrawPath(dpen, dp);
+            }
+            Theme.Text(g, "✕", Theme.Small, r, delHover ? Color.White : Theme.Ink, TextFormatFlags.HorizontalCenter);
+        }
+    }
+}
+
+// 放大查看图片窗口：点击或按 Esc 关闭，绝不写入剪贴板
+class ImageViewer : Form
+{
+    readonly Image img;
+
+    public ImageViewer(Image image)
+    {
+        img = image;
+        Text = "查看参考图（点击或按 Esc 关闭）";
+        Font = Theme.Small;
+        BackColor = Theme.Bg;
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        StartPosition = FormStartPosition.Manual;
+        MinimizeBox = MaximizeBox = false;
+        ShowInTaskbar = false;
+        TopMost = true;
+        KeyPreview = true;
+        DoubleBuffered = true;
+        Cursor = Cursors.Hand;
+        AutoScaleMode = AutoScaleMode.None;
+
+        Rectangle wa = Screen.FromPoint(Cursor.Position).WorkingArea;
+        int maxW = (int)(wa.Width * 0.8), maxH = (int)(wa.Height * 0.8);
+        int pad = 24;
+        float scale = Math.Min(1f, Math.Min((float)(maxW - pad) / Math.Max(1, img.Width), (float)(maxH - pad) / Math.Max(1, img.Height)));
+        int cw = Math.Max(200, (int)Math.Round(img.Width * scale) + pad);
+        int ch = Math.Max(150, (int)Math.Round(img.Height * scale) + pad);
+        ClientSize = new Size(Math.Min(maxW, cw), Math.Min(maxH, ch));
+        Location = new Point(wa.Left + (wa.Width - Width) / 2, wa.Top + (wa.Height - Height) / 2);
+
+        MouseUp += delegate { Close(); };
+        KeyDown += delegate(object o, KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Escape) { e.SuppressKeyPress = true; Close(); }
+        };
+    }
+
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        Activate();
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        Graphics g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+        g.Clear(Theme.Bg);
+        if (img == null || img.Width <= 0 || img.Height <= 0) return;
+
+        float availW = Math.Max(1, ClientSize.Width - 24);
+        float availH = Math.Max(1, ClientSize.Height - 24);
+        float scale = Math.Min(1f, Math.Min(availW / img.Width, availH / img.Height));
+        float dw = img.Width * scale, dh = img.Height * scale;
+        float dx = (ClientSize.Width - dw) / 2f, dy = (ClientSize.Height - dh) / 2f;
+        g.DrawImage(img, dx, dy, dw, dh);
+        using (Pen p = new Pen(Theme.Line)) g.DrawRectangle(p, dx - 1, dy - 1, dw + 1, dh + 1);
+    }
+}
+
 class MainForm : Form
 {
     const int WM_MOUSEACTIVATE = 0x21;
     const int MA_NOACTIVATE = 3;
     const int HTCLIENT = 1;
-    const int FormW = 380, HeaderH = 80, FooterH = 52;
+    const int FormW = 380, HeaderH = 80, FooterH = 52, ContextBarH = 34, ImageAreaH = 216;
+    const int MaxVisibleCards = 9, MaxPhrases = 20, MaxImages = 6, MaxImageSide = 2560;
 
     static readonly string[] Defaults =
     {
@@ -566,13 +716,24 @@ class MainForm : Form
 
     readonly string file = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "phrases.txt");
     readonly List<Phrase> phrases = new List<Phrase>();
+    readonly List<Image> images = new List<Image>();
     readonly Panel header = new Panel();
     readonly Panel list = new Panel();
+    readonly Panel contextBar = new Panel();
+    readonly Panel imagePanel = new Panel();
+    readonly Panel imageHeader = new Panel();
+    readonly Panel imageGrid = new Panel();
     readonly Panel footer = new Panel();
     readonly Label status = new Label();
+    readonly PillButton btnPin = new PillButton("📌");
+    readonly PillButton btnSettings = new PillButton("\u2699");
+    readonly PillButton btnContext = new PillButton("扩展上下文窗口");
+    readonly PillButton btnPasteImg = new PillButton("粘贴截图");
+    readonly PillButton btnClearImg = new PillButton("清空");
     readonly PillButton btnAdd = new PillButton("＋ 新增");
     readonly PillButton btnManage = new PillButton("管理");
-    readonly PillButton btnSettings = new PillButton("\u2699");
+    bool topMost = true;
+    bool contextExpanded;
     bool userMode;       // 用户模式：复制时自动加后缀，界面不显示
     string userSuffix = "";
     bool manage;  // 管理模式：卡片只编辑/删除，不复制
@@ -620,15 +781,75 @@ class MainForm : Form
         header.Dock = DockStyle.Top;
         header.Height = HeaderH;
         header.Paint += PaintHeader;
+        btnPin.Font = Theme.Sym;
+        btnPin.SetBounds(FormW - 84, 12, 32, 32);
+        btnPin.Click += delegate { ToggleTopMost(); };
         btnSettings.Outline = true;
         btnSettings.Font = Theme.Sym;
         btnSettings.SetBounds(FormW - 46, 12, 32, 32);
         btnSettings.Click += delegate { OpenSettings(); };
         toolTip.SetToolTip(btnSettings, "设置");
+        header.Controls.Add(btnPin);
         header.Controls.Add(btnSettings);
 
         list.Dock = DockStyle.Fill;
         list.AutoScroll = true;
+
+        contextBar.Dock = DockStyle.Bottom;
+        contextBar.Height = ContextBarH;
+        contextBar.Paint += delegate(object o, PaintEventArgs e)
+        {
+            using (Pen p = new Pen(Theme.Line)) e.Graphics.DrawLine(p, 14, 0, contextBar.Width - 14, 0);
+        };
+        btnContext.Outline = true;
+        btnContext.SetBounds(14, 4, FormW - 28, 26);
+        btnContext.Click += delegate { ToggleContext(); };
+        toolTip.SetToolTip(btnContext, "Expand context window");
+        contextBar.Controls.Add(btnContext);
+
+        imagePanel.Dock = DockStyle.Bottom;
+        imagePanel.Height = ImageAreaH;
+        imagePanel.Visible = false;
+        imagePanel.AllowDrop = true;
+        imagePanel.DragEnter += OnImageDragEnter;
+        imagePanel.DragDrop += OnImageDragDrop;
+
+        imageHeader.Dock = DockStyle.Top;
+        imageHeader.Height = 36;
+        imageHeader.AllowDrop = true;
+        imageHeader.DragEnter += OnImageDragEnter;
+        imageHeader.DragDrop += OnImageDragDrop;
+        imageHeader.Paint += delegate(object o, PaintEventArgs e)
+        {
+            Theme.Text(e.Graphics, "可拖入图片 · 最多 6 张", Theme.Small,
+                new Rectangle(104, 4, 196, 28), Theme.Muted, TextFormatFlags.Left);
+        };
+        btnPasteImg.Outline = true;
+        btnPasteImg.SetBounds(14, 5, 82, 26);
+        btnPasteImg.Click += delegate { PasteImage(); };
+        btnClearImg.Outline = true;
+        btnClearImg.SetBounds(FormW - 70, 5, 56, 26);
+        btnClearImg.Click += delegate { ClearImages(); };
+        imageHeader.Controls.Add(btnPasteImg);
+        imageHeader.Controls.Add(btnClearImg);
+
+        imageGrid.Dock = DockStyle.Fill;
+        imageGrid.AutoScroll = true;
+        imageGrid.AllowDrop = true;
+        imageGrid.DragEnter += OnImageDragEnter;
+        imageGrid.DragDrop += OnImageDragDrop;
+        imageGrid.Paint += delegate(object o, PaintEventArgs e)
+        {
+            if (images.Count == 0)
+            {
+                Theme.Text(e.Graphics, "暂无参考图片 · 点「粘贴截图」或拖入图片文件", Theme.Small,
+                    new Rectangle(14, 0, imageGrid.Width - 28, imageGrid.Height),
+                    Theme.Muted, TextFormatFlags.HorizontalCenter);
+            }
+        };
+
+        imagePanel.Controls.Add(imageGrid);
+        imagePanel.Controls.Add(imageHeader);
 
         footer.Dock = DockStyle.Bottom;
         footer.Height = FooterH;
@@ -648,8 +869,11 @@ class MainForm : Form
         footer.Controls.Add(btnManage);
         footer.Controls.Add(btnAdd);
 
+        // Controls 顺序决定 Dock 顺序：后加入的先停靠在边缘，list 最后占满剩余空间
         Controls.Add(list);
         Controls.Add(header);
+        Controls.Add(contextBar);
+        Controls.Add(imagePanel);
         Controls.Add(footer);
 
         shownDate = DateTokens.BusinessDate;
@@ -668,10 +892,21 @@ class MainForm : Form
 
         KeyDown += OnKey;
         LoadPhrases();
+        UpdatePinButton();
         ClientSize = new Size(FormW, 300);
         Rectangle wa = Screen.PrimaryScreen.WorkingArea;
         Location = new Point(wa.Right - Width - 20, wa.Top + 60);
         Rebuild();
+    }
+
+    protected override void OnFormClosed(FormClosedEventArgs e)
+    {
+        foreach (Control c in imageGrid.Controls) c.Dispose();
+        imageGrid.Controls.Clear();
+        foreach (Image img in images) img.Dispose();
+        images.Clear();
+        if (logo != null) { logo.Dispose(); logo = null; }
+        base.OnFormClosed(e);
     }
 
     protected override bool ShowWithoutActivation { get { return true; } }
@@ -700,6 +935,245 @@ class MainForm : Form
         using (Pen p = new Pen(Theme.Line)) g.DrawLine(p, 0, header.Height - 1, header.Width, header.Height - 1);
     }
 
+    void UpdatePinButton()
+    {
+        TopMost = topMost;
+        btnPin.Outline = !topMost;
+        btnPin.Invalidate();
+        toolTip.SetToolTip(btnPin, topMost ? "置顶：开" : "置顶：关");
+    }
+
+    void ToggleTopMost()
+    {
+        topMost = !topMost;
+        UpdatePinButton();
+        Save();
+        Flash(topMost ? "已置顶" : "已取消置顶", false);
+    }
+
+    void ToggleContext()
+    {
+        contextExpanded = !contextExpanded;
+        imagePanel.Visible = contextExpanded;
+        btnContext.Text = contextExpanded ? "收起上下文" : "扩展上下文窗口";
+        btnContext.Invalidate();
+        if (contextExpanded) RebuildImages();
+        UpdateWindowSize();
+    }
+
+    static Image NormalizeImage(Image src)
+    {
+        int w = src.Width, h = src.Height;
+        if (w > MaxImageSide || h > MaxImageSide)
+        {
+            float scale = (float)MaxImageSide / Math.Max(w, h);
+            w = Math.Max(1, (int)Math.Round(w * scale));
+            h = Math.Max(1, (int)Math.Round(h * scale));
+        }
+        Bitmap bmp = new Bitmap(w, h);
+        using (Graphics g = Graphics.FromImage(bmp))
+        {
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g.SmoothingMode = SmoothingMode.HighQuality;
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            g.DrawImage(src, new Rectangle(0, 0, w, h));
+        }
+        return bmp;
+    }
+
+    bool AddStagedImage(Image raw, out bool evicted)
+    {
+        evicted = false;
+        if (raw == null) return false;
+        Image norm;
+        try { norm = NormalizeImage(raw); }
+        finally { raw.Dispose(); }
+
+        if (images.Count >= MaxImages)
+        {
+            Image old = images[0];
+            images.RemoveAt(0);
+            old.Dispose();
+            evicted = true;
+        }
+        images.Add(norm);
+        return true;
+    }
+
+    void PasteImage()
+    {
+        try
+        {
+            if (!Clipboard.ContainsImage())
+            {
+                Flash("剪贴板里没有图片", true);
+                return;
+            }
+            Image clip = Clipboard.GetImage();
+            if (clip == null)
+            {
+                Flash("剪贴板里没有图片", true);
+                return;
+            }
+            bool evicted;
+            AddStagedImage(clip, out evicted);
+            RebuildImages();
+            Flash(evicted ? "已满 6 张，已移除最早的一张" : "已粘贴截图", false);
+        }
+        catch
+        {
+            Flash("读取剪贴板图片失败", true);
+        }
+    }
+
+    static bool IsAllowedImageExt(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return false;
+        string ext = Path.GetExtension(path);
+        if (ext == null) return false;
+        ext = ext.ToLowerInvariant();
+        return ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".gif";
+    }
+
+    void OnImageDragEnter(object sender, DragEventArgs e)
+    {
+        if (e.Data.GetDataPresent(DataFormats.FileDrop) || e.Data.GetDataPresent(DataFormats.Bitmap))
+            e.Effect = DragDropEffects.Copy;
+        else
+            e.Effect = DragDropEffects.None;
+    }
+
+    void OnImageDragDrop(object sender, DragEventArgs e)
+    {
+        int added = 0;
+        bool ignored = false;
+        bool anyEvicted = false;
+
+        if (e.Data.GetDataPresent(DataFormats.FileDrop))
+        {
+            string[] files = e.Data.GetData(DataFormats.FileDrop) as string[];
+            if (files != null)
+            {
+                foreach (string f in files)
+                {
+                    if (!IsAllowedImageExt(f)) { ignored = true; continue; }
+                    try
+                    {
+                        byte[] bytes = File.ReadAllBytes(f);
+                        using (MemoryStream ms = new MemoryStream(bytes))
+                        {
+                            Image raw = Image.FromStream(ms);
+                            bool ev;
+                            if (AddStagedImage(raw, out ev))
+                            {
+                                added++;
+                                if (ev) anyEvicted = true;
+                            }
+                        }
+                    }
+                    catch { ignored = true; }
+                }
+            }
+        }
+        else if (e.Data.GetDataPresent(DataFormats.Bitmap))
+        {
+            try
+            {
+                Image bmp = e.Data.GetData(DataFormats.Bitmap) as Image;
+                if (bmp != null)
+                {
+                    Image clone = new Bitmap(bmp);
+                    bool ev;
+                    if (AddStagedImage(clone, out ev))
+                    {
+                        added++;
+                        if (ev) anyEvicted = true;
+                    }
+                }
+            }
+            catch { ignored = true; }
+        }
+
+        if (added > 0)
+        {
+            RebuildImages();
+            if (anyEvicted) Flash("已满 6 张，已移除最早的一张", false);
+            else if (ignored) Flash("已添加图片（非支持格式已忽略）", false);
+            else Flash("已添加图片", false);
+        }
+        else if (ignored)
+        {
+            Flash("仅支持拖入 png/jpg/jpeg/bmp/gif 图片", true);
+        }
+    }
+
+    void RebuildImages()
+    {
+        imageGrid.SuspendLayout();
+        imageGrid.AutoScrollPosition = Point.Empty;
+        foreach (Control c in imageGrid.Controls) c.Dispose();
+        imageGrid.Controls.Clear();
+
+        for (int i = 0; i < images.Count; i++)
+        {
+            ImageCard ic = new ImageCard(images[i]);
+            int col = i % 3, row = i / 3;
+            ic.Location = new Point(14 + col * (104 + 10), 6 + row * (78 + 8));
+            ic.ViewRequested += delegate(ImageCard k) { BeginInvoke((MethodInvoker)delegate { ViewImage(k.Img); }); };
+            ic.DeleteRequested += delegate(ImageCard k) { BeginInvoke((MethodInvoker)delegate { RemoveImage(k.Img); }); };
+            ic.AllowDrop = true;
+            ic.DragEnter += OnImageDragEnter;
+            ic.DragDrop += OnImageDragDrop;
+            imageGrid.Controls.Add(ic);
+        }
+
+        btnClearImg.Visible = images.Count > 0;
+        imageGrid.ResumeLayout();
+        imageGrid.Invalidate();
+    }
+
+    void ViewImage(Image img)
+    {
+        if (img == null) return;
+        IntPtr target = IntPtr.Zero;
+        try { target = GetForegroundWindow(); } catch { }
+        using (ImageViewer v = new ImageViewer(img))
+        {
+            v.ShowDialog(this);
+            if (target != IntPtr.Zero && target != Handle)
+                try { SetForegroundWindow(target); } catch { }
+        }
+    }
+
+    void RemoveImage(Image img)
+    {
+        if (images.Remove(img))
+        {
+            img.Dispose();
+            RebuildImages();
+            Flash("已移除图片", false);
+        }
+    }
+
+    void ClearImages()
+    {
+        if (images.Count == 0) return;
+        IntPtr target = IntPtr.Zero;
+        try { target = GetForegroundWindow(); } catch { }
+        DialogResult r = MessageBox.Show(this, "清空全部 " + images.Count + " 张参考图片？", "确认清空",
+            MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2);
+        if (target != IntPtr.Zero && target != Handle)
+            try { SetForegroundWindow(target); } catch { }
+        if (r != DialogResult.Yes) return;
+
+        foreach (Control c in imageGrid.Controls) c.Dispose();
+        imageGrid.Controls.Clear();
+        foreach (Image img in images) img.Dispose();
+        images.Clear();
+        RebuildImages();
+        Flash("已清空图片", false);
+    }
+
     // phrases.txt 每行：中文|English|点击次数（后两项可省略）
     void LoadPhrases()
     {
@@ -708,12 +1182,14 @@ class MainForm : Form
             string[] lines = File.Exists(file) ? File.ReadAllLines(file, Encoding.UTF8) : Defaults;
             foreach (string line in lines)
             {
-                // 设置行：#user_mode=1、#user_suffix=后缀
+                // 设置行：#topmost=1、#user_mode=1、#user_suffix=后缀
+                if (line.StartsWith("#topmost=")) { topMost = line.Substring(9).Trim() != "0"; continue; }
                 if (line.StartsWith("#user_mode=")) { userMode = line.Substring(11).Trim() == "1"; continue; }
                 if (line.StartsWith("#user_suffix=")) { userSuffix = line.Substring(13).Trim(); continue; }
                 if (line.StartsWith("#last_qty=")) { int.TryParse(line.Substring(10).Trim(), out lastQty); continue; }
                 if (line.StartsWith("#day_cutoff=")) { int.TryParse(line.Substring(12).Trim(), out DateTokens.CutoffHour); continue; }
                 if (line.StartsWith("#defaults=")) { int.TryParse(line.Substring(10).Trim(), out defaultsVersion); continue; }
+                if (line.StartsWith("#")) continue;
                 string[] parts = line.Split('|');
                 string zh = parts[0].Trim();
                 if (zh.Length == 0) continue;
@@ -775,6 +1251,7 @@ class MainForm : Form
         try
         {
             List<string> lines = new List<string>();
+            lines.Add("#topmost=" + (topMost ? "1" : "0"));
             lines.Add("#user_mode=" + (userMode ? "1" : "0"));
             lines.Add("#user_suffix=" + userSuffix);
             lines.Add("#day_cutoff=" + DateTokens.CutoffHour);
@@ -794,6 +1271,31 @@ class MainForm : Form
         catch { Flash("保存失败（目录只读？）", true); }
     }
 
+    int CalcListHeight(out int totalCardH)
+    {
+        totalCardH = 10;
+        int visibleH = 10;
+        for (int i = 0; i < phrases.Count; i++)
+        {
+            int ch = phrases[i].En.Length > 0 ? 58 : 44;
+            totalCardH += ch;
+            if (i < MaxVisibleCards) visibleH += ch;
+        }
+        totalCardH += 4;
+        visibleH += 4;
+
+        int maxList = (int)(Screen.PrimaryScreen.WorkingArea.Height * 0.75) - HeaderH - ContextBarH - FooterH;
+        return Math.Max(64, Math.Min(visibleH, maxList));
+    }
+
+    void UpdateWindowSize()
+    {
+        int total;
+        int listH = CalcListHeight(out total);
+        int extraH = contextExpanded ? ImageAreaH : 0;
+        ClientSize = new Size(FormW, HeaderH + listH + ContextBarH + extraH + FooterH);
+    }
+
     void Rebuild()
     {
         list.SuspendLayout();
@@ -802,7 +1304,6 @@ class MainForm : Form
         list.Controls.Clear();
 
         List<Card> cards = new List<Card>();
-        int total = 10;
         for (int i = 0; i < phrases.Count; i++)
         {
             Card c = new Card(phrases[i], i, manage);
@@ -811,12 +1312,10 @@ class MainForm : Form
             c.EditRequested += delegate(Card k) { BeginInvoke((MethodInvoker)delegate { EditPhrase(k.P); }); };
             c.DeleteRequested += delegate(Card k) { BeginInvoke((MethodInvoker)delegate { RemovePhrase(k.P); }); };
             cards.Add(c);
-            total += c.Height;
         }
-        total += 4;
 
-        int maxList = (int)(Screen.PrimaryScreen.WorkingArea.Height * 0.75) - HeaderH - FooterH;
-        int listH = Math.Max(64, Math.Min(total, maxList));
+        int total;
+        int listH = CalcListHeight(out total);
         int cardW = FormW - 28 - (total > listH ? SystemInformation.VerticalScrollBarWidth : 0);
 
         int y = 10;
@@ -829,7 +1328,7 @@ class MainForm : Form
             list.Controls.Add(c);
         }
         list.ResumeLayout();
-        ClientSize = new Size(FormW, HeaderH + listH + FooterH);
+        UpdateWindowSize();
     }
 
     void CopyText(Phrase p, bool en)
@@ -877,6 +1376,11 @@ class MainForm : Form
 
     void AddPhrase()
     {
+        if (phrases.Count >= MaxPhrases)
+        {
+            Flash("已达 20 条上限，请先在管理中删除不常用的", true);
+            return;
+        }
         using (EditDialog d = new EditDialog("新增词条", "", ""))
         {
             if (d.ShowDialog(this) != DialogResult.OK) return;
@@ -967,3 +1471,4 @@ class MainForm : Form
         tip.Start();
     }
 }
+
