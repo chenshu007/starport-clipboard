@@ -772,7 +772,8 @@ class MainForm : Form
 
     public MainForm()
     {
-        Text = "Starport 固定剪贴板";
+        string ver = ReadVersion();
+        Text = "Starport 固定剪贴板" + (ver.Length > 0 ? " v" + ver : "");
         Font = Theme.Small;
         BackColor = Theme.Bg;
         TopMost = true;
@@ -927,6 +928,20 @@ class MainForm : Form
         images.Clear();
         if (logo != null) { logo.Dispose(); logo = null; }
         base.OnFormClosed(e);
+    }
+
+    // 版本号来自编译时打包进 exe 的 VERSION 文件（见 build.bat 的 /resource:VERSION,version.txt）
+    static string ReadVersion()
+    {
+        try
+        {
+            using (Stream s = Assembly.GetExecutingAssembly().GetManifestResourceStream("version.txt"))
+            {
+                if (s == null) return "";
+                using (StreamReader r = new StreamReader(s)) return r.ReadToEnd().Trim();
+            }
+        }
+        catch { return ""; }
     }
 
     protected override bool ShowWithoutActivation { get { return true; } }

@@ -16,6 +16,7 @@
 - 日期占位符：词条里写 `{今天}` / `{明天}`（英文栏也可写 `{today}` / `{tomorrow}`），复制和显示时自动换成日期，中文栏为「10月15日」、英文栏为「15 Oct」；设置里可设营业日分界时间（如凌晨 4 点前仍算前一天）
 - 数量占位符：词条里写 `{数量}`（英文栏 `{qty}`），卡片上显示为「?」，点击时弹窗询问份数：直接按 1–9 立即复制，回车用上次的数字，Esc 取消；关闭后焦点自动回到原来的软件
 - 按使用次数排名：每次复制计数，下次启动时常用的排在前面
+- 窗口标题栏显示版本号（如 `v1.6.2`），取自仓库的 `VERSION` 文件
 - 单个 exe，约 25 KB，免安装、无需管理员权限、不联网、不写注册表
 
 ## 下载
@@ -39,7 +40,7 @@
 不需要安装任何工具，Windows 自带的 C# 编译器就够了。把仓库下载到本地，双击 `build.bat`，或在 cmd 里运行：
 
 ```bat
-%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /target:winexe /optimize+ /codepage:65001 /win32icon:app.ico /resource:logo.png,logo.png /out:FixedClipboard.exe /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll FixedClipboard.cs
+%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /target:winexe /optimize+ /codepage:65001 /win32icon:app.ico /resource:logo.png,logo.png /resource:VERSION,version.txt /out:FixedClipboard.exe /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll FixedClipboard.cs
 ```
 
 每次推送到 `main`，GitHub Actions 都会在 Windows 上编译一次；修改 `VERSION` 文件里的版本号并推送，会自动发布对应的 Release（如 `v1.0.1`）。
