@@ -368,8 +368,9 @@ class MainForm : Form
         BackColor = Theme.Bg;
         TopMost = true;
         ShowInTaskbar = true;  // 任务栏显示图标，被遮挡时可点任务栏找回
-        FormBorderStyle = FormBorderStyle.FixedToolWindow;
+        FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
+        MinimizeBox = true;
         StartPosition = FormStartPosition.Manual;
         KeyPreview = true;
         AutoScaleMode = AutoScaleMode.None;
@@ -471,6 +472,7 @@ class MainForm : Form
                 phrases.Add(new Phrase(zh, en, Math.Max(0, n)));
             }
             if (!File.Exists(file)) Save();
+            else HideFile();  // 旧版本留下的可见 phrases.txt 也设为隐藏
         }
         catch { Flash("读取 phrases.txt 失败", true); }
 
@@ -484,6 +486,13 @@ class MainForm : Form
         }
     }
 
+    // phrases.txt 设为隐藏，文件夹里看起来只有一个 exe
+    void HideFile()
+    {
+        try { File.SetAttributes(file, File.GetAttributes(file) | FileAttributes.Hidden); }
+        catch { }
+    }
+
     void Save()
     {
         try
@@ -491,7 +500,14 @@ class MainForm : Form
             string[] lines = new string[phrases.Count];
             for (int i = 0; i < phrases.Count; i++)
                 lines[i] = phrases[i].Zh + "|" + phrases[i].En + "|" + phrases[i].Count;
-            File.WriteAllLines(file, lines, new UTF8Encoding(false));
+            // 隐藏文件不能用 File.WriteAllLines 覆盖（会拒绝访问），改为打开后截断再写
+            byte[] data = new UTF8Encoding(false).GetBytes(string.Join("\r\n", lines) + "\r\n");
+            using (FileStream fs = new FileStream(file, FileMode.OpenOrCreate, FileAccess.Write))
+            {
+                fs.SetLength(0);
+                fs.Write(data, 0, data.Length);
+            }
+            HideFile();
         }
         catch { Flash("保存失败（目录只读？）", true); }
     }
