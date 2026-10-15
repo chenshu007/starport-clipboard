@@ -89,6 +89,7 @@ class Phrase
 {
     public string Zh, En;
     public int Count;
+    public bool Pinned;  // 钉住：固定在最上面，不参与按次数排序
     public Phrase(string zh, string en, int count) { Zh = zh; En = en; Count = count; }
 }
 
@@ -97,13 +98,13 @@ class Phrase
 // 管理模式：不复制；主体或 ✎ = 编辑，✕ = 删除。
 class Card : Control
 {
-    enum Zone { None, Body, En, Edit, Del }
+    enum Zone { None, Body, En, Pin, Edit, Del }
 
     public readonly Phrase P;
     public readonly int Index;
     public readonly bool Manage;
     public event Action<Card, bool> CopyRequested;  // bool = 是否英文
-    public event Action<Card> EditRequested, DeleteRequested;
+    public event Action<Card> EditRequested, DeleteRequested, PinRequested;
 
     bool hover;
     Zone zone;
@@ -133,12 +134,13 @@ class Card : Control
     Rectangle EnRect { get { return new Rectangle(Width - 42, (BoxH - 22) / 2, 32, 22); } }
     Rectangle DelRect { get { return new Rectangle(Width - 38, (BoxH - 28) / 2, 28, 28); } }
     Rectangle EditRect { get { return new Rectangle(Width - 68, (BoxH - 28) / 2, 28, 28); } }
+    Rectangle PinRect { get { return new Rectangle(Width - 98, (BoxH - 28) / 2, 28, 28); } }
 
     Rectangle TextArea
     {
         get
         {
-            int right = Manage ? EditRect.Left - 6 : (P.En.Length > 0 ? EnRect.Left - 8 : Width - 12);
+            int right = Manage ? PinRect.Left - 6 : (P.En.Length > 0 ? EnRect.Left - 8 : Width - 12);
             return new Rectangle(38, 0, Math.Max(10, right - 38), BoxH);
         }
     }
@@ -166,6 +168,7 @@ class Card : Control
         {
             if (DelRect.Contains(pt)) return Zone.Del;
             if (EditRect.Contains(pt)) return Zone.Edit;
+            if (PinRect.Contains(pt)) return Zone.Pin;
             return Zone.Body;
         }
         if (P.En.Length > 0 && EnRect.Contains(pt)) return Zone.En;
@@ -195,6 +198,7 @@ class Card : Control
             case Zone.En: if (CopyRequested != null) CopyRequested(this, true); break;
             case Zone.Edit: if (EditRequested != null) EditRequested(this); break;
             case Zone.Del: if (DeleteRequested != null) DeleteRequested(this); break;
+            case Zone.Pin: if (PinRequested != null) PinRequested(this); break;
         }
     }
 
@@ -215,12 +219,20 @@ class Card : Control
             g.DrawPath(pen, path);
         }
 
+        // 钉住的卡片：左侧一道橙色细条
+        if (P.Pinned)
+            using (GraphicsPath bar = Theme.Round(new RectangleF(3, 10, 3, Math.Max(4, h - 20)), 1.5f))
+            using (SolidBrush bb = new SolidBrush(Theme.Clay))
+                g.FillPath(bb, bar);
+
         // 序号对应键盘最上排 1 2 3 … 9 0；第 11 张起不显示序号
         Theme.Text(g, Index < 9 ? (Index + 1).ToString() : (Index == 9 ? "0" : ""), Theme.Num,
             new Rectangle(6, 0, 28, h), Theme.Clay, TextFormatFlags.HorizontalCenter);
 
         if (Manage)
         {
+            Theme.Text(g, "\U0001F4CC", Theme.Sym, PinRect,
+                P.Pinned || zone == Zone.Pin ? Theme.Clay : Theme.Line, TextFormatFlags.HorizontalCenter);
             Theme.Text(g, "✎", Theme.Sym, EditRect, zone == Zone.Edit || zone == Zone.Body ? Theme.Clay : Theme.Muted, TextFormatFlags.HorizontalCenter);
             Theme.Text(g, "✕", Theme.Sym, DelRect, zone == Zone.Del ? Color.Firebrick : Theme.Muted, TextFormatFlags.HorizontalCenter);
         }
@@ -466,7 +478,7 @@ class SettingsDialog : Form
 
     public int CutoffHour { get { return (int)numCutoff.Value; } }
 
-    public SettingsDialog(bool userMode, string suffix, int cutoffHour)
+    public SettingsDialog(MainForm main, bool userMode, string suffix, int cutoffHour)
     {
         Text = "设置";
         Font = Theme.Small;
@@ -477,7 +489,7 @@ class SettingsDialog : Form
         ShowInTaskbar = false;
         TopMost = true;
         AutoScaleMode = AutoScaleMode.None;
-        ClientSize = new Size(340, 320);
+        ClientSize = new Size(340, 362);
 
         chk.Text = "用户模式：复制时自动在末尾加上后缀";
         chk.SetBounds(20, 16, 300, 24);
@@ -515,14 +527,14 @@ class SettingsDialog : Form
         ok.FlatAppearance.BorderColor = Theme.Line;
         ok.BackColor = Theme.Clay;
         ok.ForeColor = Color.White;
-        ok.SetBounds(214, 270, 106, 32);
+        ok.SetBounds(214, 312, 106, 32);
         ok.DialogResult = DialogResult.OK;
         Button cancel = new Button();
         cancel.Text = "取消";
         cancel.FlatStyle = FlatStyle.Flat;
         cancel.FlatAppearance.BorderColor = Theme.Line;
         cancel.BackColor = Color.White;
-        cancel.SetBounds(100, 270, 106, 32);
+        cancel.SetBounds(100, 312, 106, 32);
         cancel.DialogResult = DialogResult.Cancel;
 
         chk.CheckedChanged += delegate { UpdatePreview(); };
@@ -539,14 +551,30 @@ class SettingsDialog : Form
         about.ForeColor = Theme.Muted;
         about.LinkColor = Theme.Clay;
         about.ActiveLinkColor = Theme.ClayDark;
-        about.SetBounds(20, 240, 300, 20);
+        about.SetBounds(20, 284, 300, 20);
         about.LinkClicked += delegate
         {
             try { System.Diagnostics.Process.Start("https://" + MainForm.Website); }
             catch { MessageBox.Show(this, "无法打开浏览器", "Starport", MessageBoxButtons.OK, MessageBoxIcon.Information); }
         };
 
-        Controls.AddRange(new Control[] { chk, l, tSuffix, preview, numCutoff, lc, lcEnd, lc2, about, ok, cancel });
+        // 导出/导入词条：方便同事之间共用一套常用语、换电脑
+        Button exp = new Button();
+        exp.Text = "导出词条…";
+        exp.FlatStyle = FlatStyle.Flat;
+        exp.FlatAppearance.BorderColor = Theme.Line;
+        exp.BackColor = Color.White;
+        exp.SetBounds(20, 240, 146, 30);
+        exp.Click += delegate { main.ExportPhrases(this); };
+        Button imp = new Button();
+        imp.Text = "导入词条…";
+        imp.FlatStyle = FlatStyle.Flat;
+        imp.FlatAppearance.BorderColor = Theme.Line;
+        imp.BackColor = Color.White;
+        imp.SetBounds(174, 240, 146, 30);
+        imp.Click += delegate { main.ImportPhrases(this); };
+
+        Controls.AddRange(new Control[] { chk, l, tSuffix, preview, numCutoff, lc, lcEnd, lc2, exp, imp, about, ok, cancel });
         AcceptButton = ok;
         CancelButton = cancel;
     }
@@ -746,6 +774,10 @@ class MainForm : Form
     };
     int defaultsVersion = 1;
     int lastQty = 2;
+    Point winPos;          // 上次关闭/拖动后的窗口位置
+    bool hasWinPos;
+    Phrase undoPhrase;     // 刚删除、还能撤销的词条
+    int undoIndex;
 
     [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hWnd);
@@ -762,6 +794,7 @@ class MainForm : Form
     readonly Panel imageGrid = new Panel();
     readonly Panel footer = new Panel();
     readonly Label status = new Label();
+    readonly PillButton btnUndo = new PillButton("撤销");  // 删除后临时出现
     readonly PillButton btnPin = new PillButton("📌");
     readonly PillButton btnSettings = new PillButton("\u2699");
     readonly PillButton btnContext = new PillButton("扩展上下文窗口");
@@ -779,12 +812,44 @@ class MainForm : Form
     readonly ToolTip toolTip = new ToolTip();
     Image logo;
 
+    [DllImport("user32.dll")] static extern int RegisterWindowMessage(string name);
+    [DllImport("user32.dll")] static extern bool PostMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")] static extern bool AllowSetForegroundWindow(int processId);
+
+    // 同一个文件夹只允许运行一个实例（两个实例同时写 phrases.txt 会互相覆盖）
+    static string InstanceKey;
+    int showMsg;
+
+    static string MakeInstanceKey()
+    {
+        string path = AppDomain.CurrentDomain.BaseDirectory.ToLowerInvariant();
+        uint h = 2166136261;  // FNV-1a，跨进程稳定
+        foreach (char ch in path) { h ^= ch; h *= 16777619; }
+        return "StarportFixedClipboard_" + h.ToString("X8");
+    }
+
     [STAThread]
     static void Main()
     {
+        InstanceKey = MakeInstanceKey();
+        Mutex mutex = null;
+        bool first = true;
+        try { mutex = new Mutex(true, "Local\\" + InstanceKey, out first); } catch { first = true; }
+        if (!first)
+        {
+            // 已经在运行：通知原来的窗口显示到最前面，然后退出
+            try
+            {
+                AllowSetForegroundWindow(-1);
+                PostMessage((IntPtr)0xFFFF, RegisterWindowMessage(InstanceKey), IntPtr.Zero, IntPtr.Zero);
+            }
+            catch { }
+            return;
+        }
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
         Application.Run(new MainForm());
+        GC.KeepAlive(mutex);
     }
 
     public MainForm()
@@ -896,6 +961,11 @@ class MainForm : Form
             using (Pen p = new Pen(Theme.Line)) e.Graphics.DrawLine(p, 0, 0, footer.Width, 0);
         };
         status.SetBounds(14, 15, FormW - 196, 22);
+        btnUndo.Outline = true;
+        btnUndo.SetBounds(FormW - 240, 11, 56, 30);
+        btnUndo.Visible = false;
+        btnUndo.Click += delegate { UndoDelete(); };
+        footer.Controls.Add(btnUndo);
         status.ForeColor = Theme.Clay;
         status.AutoEllipsis = true;
         btnAdd.SetBounds(FormW - 106, 11, 92, 30);
@@ -934,7 +1004,29 @@ class MainForm : Form
         ClientSize = new Size(FormW, 300);
         Rectangle wa = Screen.PrimaryScreen.WorkingArea;
         Location = new Point(wa.Right - Width - 20, wa.Top + 60);
+        if (hasWinPos && IsOnScreen(winPos)) Location = winPos;  // 恢复上次的位置
         Rebuild();
+
+        try { showMsg = RegisterWindowMessage(InstanceKey); } catch { showMsg = 0; }
+        ResizeEnd += delegate { RememberPosition(); };  // 拖动窗口结束时记住位置
+        FormClosing += delegate { RememberPosition(); };
+    }
+
+    // 标题栏左上角附近在某块屏幕的工作区内，才认为位置有效（防止拔掉副屏后窗口跑到看不见的地方）
+    static bool IsOnScreen(Point p)
+    {
+        foreach (Screen sc in Screen.AllScreens)
+            if (sc.WorkingArea.Contains(new Point(p.X + 60, p.Y + 10))) return true;
+        return false;
+    }
+
+    void RememberPosition()
+    {
+        if (WindowState != FormWindowState.Normal) return;
+        if (hasWinPos && winPos == Location) return;
+        winPos = Location;
+        hasWinPos = true;
+        Save();
     }
 
     protected override void OnFormClosed(FormClosedEventArgs e)
@@ -968,6 +1060,14 @@ class MainForm : Form
     // 点击窗口内容时不激活本窗口，目标软件保持焦点；拖动标题栏照常
     protected override void WndProc(ref Message m)
     {
+        if (showMsg != 0 && m.Msg == showMsg)
+        {
+            // 有人再次双击了 exe：把已经开着的窗口还原并放到最前面
+            if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+            Show();
+            Activate();
+            return;
+        }
         if (m.Msg == WM_MOUSEACTIVATE && (m.LParam.ToInt64() & 0xFFFF) == HTCLIENT)
         {
             m.Result = (IntPtr)MA_NOACTIVATE;
@@ -1241,30 +1341,58 @@ class MainForm : Form
         return true;
     }
 
-    // phrases.txt 每行：中文|English|点击次数（后两项可省略）
+    // phrases.txt 每行：中文|English|点击次数|钉住（后三项可省略）
+    void ParseLines(string[] lines)
+    {
+        foreach (string line in lines)
+        {
+            if (line.StartsWith("#topmost=")) { topMost = line.Substring(9).Trim() != "0"; continue; }
+            if (line.StartsWith("#user_mode=")) { userMode = line.Substring(11).Trim() == "1"; continue; }
+            if (line.StartsWith("#user_suffix=")) { userSuffix = line.Substring(13).Trim(); continue; }
+            if (line.StartsWith("#last_qty=")) { int.TryParse(line.Substring(10).Trim(), out lastQty); continue; }
+            if (line.StartsWith("#day_cutoff=")) { int.TryParse(line.Substring(12).Trim(), out DateTokens.CutoffHour); continue; }
+            if (line.StartsWith("#defaults=")) { int.TryParse(line.Substring(10).Trim(), out defaultsVersion); continue; }
+            if (line.StartsWith("#win_pos="))
+            {
+                string[] xy = line.Substring(9).Split(',');
+                int x, y;
+                if (xy.Length == 2 && int.TryParse(xy[0], out x) && int.TryParse(xy[1], out y))
+                {
+                    winPos = new Point(x, y);
+                    hasWinPos = true;
+                }
+                continue;
+            }
+            if (IsSettingLine(line)) continue;  // 未知设置行（如新版本写入的）跳过；「#1203 ...」这类词条照常读取
+            string[] parts = line.Split('|');
+            string zh = parts[0].Trim();
+            if (zh.Length == 0) continue;
+            string en = parts.Length > 1 ? parts[1].Trim() : "";
+            int n = 0;
+            if (parts.Length > 2) int.TryParse(parts[2].Trim(), out n);
+            Phrase ph = new Phrase(zh, en, Math.Max(0, n));
+            ph.Pinned = parts.Length > 3 && parts[3].Trim() == "1";
+            phrases.Add(ph);
+        }
+    }
+
     void LoadPhrases()
     {
         try
         {
-            string[] lines = File.Exists(file) ? File.ReadAllLines(file, Encoding.UTF8) : Defaults;
-            foreach (string line in lines)
+            bool recovered = false;
+            if (File.Exists(file))
             {
-                // 设置行：#topmost=1、#user_mode=1、#user_suffix=后缀
-                if (line.StartsWith("#topmost=")) { topMost = line.Substring(9).Trim() != "0"; continue; }
-                if (line.StartsWith("#user_mode=")) { userMode = line.Substring(11).Trim() == "1"; continue; }
-                if (line.StartsWith("#user_suffix=")) { userSuffix = line.Substring(13).Trim(); continue; }
-                if (line.StartsWith("#last_qty=")) { int.TryParse(line.Substring(10).Trim(), out lastQty); continue; }
-                if (line.StartsWith("#day_cutoff=")) { int.TryParse(line.Substring(12).Trim(), out DateTokens.CutoffHour); continue; }
-                if (line.StartsWith("#defaults=")) { int.TryParse(line.Substring(10).Trim(), out defaultsVersion); continue; }
-                if (IsSettingLine(line)) continue;  // 未知设置行（如新版本写入的）跳过；「#1203 ...」这类词条照常读取
-                string[] parts = line.Split('|');
-                string zh = parts[0].Trim();
-                if (zh.Length == 0) continue;
-                string en = parts.Length > 1 ? parts[1].Trim() : "";
-                int n = 0;
-                if (parts.Length > 2) int.TryParse(parts[2].Trim(), out n);
-                phrases.Add(new Phrase(zh, en, Math.Max(0, n)));
+                ParseLines(File.ReadAllLines(file, Encoding.UTF8));
+                // 文件是空的（多半是保存时断电），而备份还在：从备份恢复
+                if (new FileInfo(file).Length == 0 && File.Exists(backupFile))
+                {
+                    ParseLines(File.ReadAllLines(backupFile, Encoding.UTF8));
+                    recovered = phrases.Count > 0;
+                }
             }
+            else ParseLines(Defaults);
+            if (recovered) { Save(); Flash("词条文件为空，已从备份恢复", true); }
             if (!File.Exists(file)) { defaultsVersion = DefaultsVersion; Save(); }
             else
             {
@@ -1296,14 +1424,48 @@ class MainForm : Form
         }
         catch { Flash("读取 phrases.txt 失败", true); }
 
-        // 启动时按点击次数从高到低排（稳定排序，次数相同保持原顺序）
-        for (int i = 1; i < phrases.Count; i++)
+        SortPhrases(true);
+        BackupDaily();
+    }
+
+    // 钉住的排最前（保持原顺序）；其余按点击次数从高到低（稳定排序）。byCount=false 时只把钉住的提到前面
+    void SortPhrases(bool byCount)
+    {
+        List<Phrase> pinned = new List<Phrase>(), rest = new List<Phrase>();
+        foreach (Phrase p in phrases) (p.Pinned ? pinned : rest).Add(p);
+        if (byCount)
         {
-            Phrase cur = phrases[i];
-            int j = i - 1;
-            while (j >= 0 && phrases[j].Count < cur.Count) { phrases[j + 1] = phrases[j]; j--; }
-            phrases[j + 1] = cur;
+            for (int i = 1; i < rest.Count; i++)
+            {
+                Phrase cur = rest[i];
+                int j = i - 1;
+                while (j >= 0 && rest[j].Count < cur.Count) { rest[j + 1] = rest[j]; j--; }
+                rest[j + 1] = cur;
+            }
         }
+        phrases.Clear();
+        phrases.AddRange(pinned);
+        phrases.AddRange(rest);
+    }
+
+    string backupFile { get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "phrases.bak"); } }
+
+    // 每天第一次启动时把 phrases.txt 备份成隐藏的 phrases.bak
+    void BackupDaily()
+    {
+        try
+        {
+            if (!File.Exists(file) || new FileInfo(file).Length == 0) return;
+            if (File.Exists(backupFile))
+            {
+                if (File.GetLastWriteTime(backupFile).Date >= DateTime.Today) return;
+                File.SetAttributes(backupFile, FileAttributes.Normal);  // 隐藏文件不能被 File.Copy 覆盖
+            }
+            File.Copy(file, backupFile, true);
+            File.SetLastWriteTime(backupFile, DateTime.Now);  // Copy 会沿用原文件时间，这里改成今天
+            File.SetAttributes(backupFile, FileAttributes.Hidden);
+        }
+        catch { }
     }
 
     // phrases.txt 设为隐藏，文件夹里看起来只有一个 exe
@@ -1324,18 +1486,34 @@ class MainForm : Form
             lines.Add("#day_cutoff=" + DateTokens.CutoffHour);
             lines.Add("#last_qty=" + lastQty);
             lines.Add("#defaults=" + defaultsVersion);
+            if (hasWinPos) lines.Add("#win_pos=" + winPos.X + "," + winPos.Y);
             foreach (Phrase p in phrases)
-                lines.Add(p.Zh + "|" + p.En + "|" + p.Count);
-            // 隐藏文件不能用 File.WriteAllLines 覆盖（会拒绝访问），改为打开后截断再写
+                lines.Add(p.Zh + "|" + p.En + "|" + p.Count + (p.Pinned ? "|1" : ""));
             byte[] data = new UTF8Encoding(false).GetBytes(string.Join("\r\n", lines.ToArray()) + "\r\n");
-            using (FileStream fs = new FileStream(file, FileMode.OpenOrCreate, FileAccess.Write))
+
+            // 先完整写入临时文件并刷到磁盘，再替换正式文件；中途断电也不会把 phrases.txt 写成半截
+            string tmp = file + ".tmp";
+            if (File.Exists(tmp)) { File.SetAttributes(tmp, FileAttributes.Normal); File.Delete(tmp); }
+            using (FileStream fs = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write))
             {
-                fs.SetLength(0);
                 fs.Write(data, 0, data.Length);
+                fs.Flush(true);
             }
-            HideFile();
+            if (File.Exists(file))
+            {
+                File.SetAttributes(file, FileAttributes.Normal);  // 隐藏文件不能直接被替换
+                try { File.Replace(tmp, file, null); }
+                catch
+                {
+                    // 某些磁盘（如网络共享）不支持替换，退回为覆盖复制
+                    File.Copy(tmp, file, true);
+                    File.Delete(tmp);
+                }
+            }
+            else File.Move(tmp, file);
         }
         catch { Flash("保存失败（目录只读？）", true); }
+        finally { if (File.Exists(file)) HideFile(); }
     }
 
     int CalcListHeight(out int totalCardH)
@@ -1385,6 +1563,7 @@ class MainForm : Form
             // 编辑/删除会重建卡片，延后执行，避免在卡片自身的鼠标事件里销毁它
             c.EditRequested += delegate(Card k) { BeginInvoke((MethodInvoker)delegate { EditPhrase(k.P); }); };
             c.DeleteRequested += delegate(Card k) { BeginInvoke((MethodInvoker)delegate { RemovePhrase(k.P); }); };
+            c.PinRequested += delegate(Card k) { BeginInvoke((MethodInvoker)delegate { TogglePin(k.P); }); };
             cards.Add(c);
         }
 
@@ -1481,14 +1660,111 @@ class MainForm : Form
         }
     }
 
+    // 直接删除，底部显示「撤销」，6 秒内可恢复
     void RemovePhrase(Phrase p)
     {
-        if (MessageBox.Show(this, "删除「" + p.Zh + "」？", "确认删除",
-                MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
-            return;
-        phrases.Remove(p);
+        int idx = phrases.IndexOf(p);
+        if (idx < 0) return;
+        phrases.RemoveAt(idx);
         Save();
         Rebuild();
+
+        string name = p.Zh.Length > 6 ? p.Zh.Substring(0, 6) + "…" : p.Zh;
+        Flash("已删除「" + name + "」", false);
+        undoPhrase = p;
+        undoIndex = idx;
+        status.Width = FormW - 258;  // 给「撤销」按钮让位
+        btnUndo.Visible = true;
+        tip.Stop();
+        tip.Interval = 6000;
+        tip.Start();
+    }
+
+    void HideUndo()
+    {
+        undoPhrase = null;
+        btnUndo.Visible = false;
+        status.Width = FormW - 196;
+    }
+
+    void UndoDelete()
+    {
+        if (undoPhrase == null) return;
+        if (phrases.Count >= MaxPhrases) { Flash("已达 20 条上限，无法恢复", true); return; }
+        phrases.Insert(Math.Min(undoIndex, phrases.Count), undoPhrase);
+        Save();
+        Rebuild();
+        Flash("已恢复", false);
+    }
+
+    void TogglePin(Phrase p)
+    {
+        p.Pinned = !p.Pinned;
+        SortPhrases(false);
+        Save();
+        Rebuild();
+        Flash(p.Pinned ? "已钉住，固定在最上面" : "已取消钉住", false);
+    }
+
+    // ---------- 5. 导出 / 导入 ----------
+    public void ExportPhrases(IWin32Window owner)
+    {
+        using (SaveFileDialog d = new SaveFileDialog())
+        {
+            d.Title = "导出词条";
+            d.Filter = "文本文件 (*.txt)|*.txt";
+            d.FileName = "starport-phrases.txt";
+            if (d.ShowDialog(owner) != DialogResult.OK) return;
+            try
+            {
+                List<string> lines = new List<string>();
+                foreach (Phrase p in phrases) lines.Add(p.Zh + "|" + p.En);  // 只导出词条，不含个人点击次数
+                File.WriteAllLines(d.FileName, lines.ToArray(), new UTF8Encoding(true));
+                MessageBox.Show(owner, "已导出 " + phrases.Count + " 条词条。", "导出词条",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(owner, "导出失败：" + ex.Message, "导出词条", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+    }
+
+    // 合并导入：已有的（中文相同）跳过，不删除现有词条，最多到 20 条
+    public void ImportPhrases(IWin32Window owner)
+    {
+        using (OpenFileDialog d = new OpenFileDialog())
+        {
+            d.Title = "导入词条";
+            d.Filter = "文本文件 (*.txt)|*.txt|所有文件 (*.*)|*.*";
+            if (d.ShowDialog(owner) != DialogResult.OK) return;
+            int added = 0, dup = 0, over = 0;
+            try
+            {
+                foreach (string line in File.ReadAllLines(d.FileName, Encoding.UTF8))
+                {
+                    if (line.Trim().Length == 0 || IsSettingLine(line)) continue;
+                    string[] parts = line.Split('|');
+                    string zh = parts[0].Trim();
+                    if (zh.Length == 0) continue;
+                    string en = parts.Length > 1 ? parts[1].Trim() : "";
+                    if (Exists(zh, null)) { dup++; continue; }
+                    if (phrases.Count >= MaxPhrases) { over++; continue; }
+                    phrases.Add(new Phrase(zh, en, 0));
+                    added++;
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(owner, "导入失败：" + ex.Message, "导入词条", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            if (added > 0) { Save(); Rebuild(); }
+            string msg = "已导入 " + added + " 条。";
+            if (dup > 0) msg += "\n跳过重复 " + dup + " 条。";
+            if (over > 0) msg += "\n超出 20 条上限，未导入 " + over + " 条。";
+            MessageBox.Show(owner, msg, "导入词条", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
     }
 
     // 数字键 1–9、0 复制对应中文（窗口激活时有效，例如刚拖动过标题栏）
@@ -1509,7 +1785,7 @@ class MainForm : Form
 
     void OpenSettings()
     {
-        using (SettingsDialog d = new SettingsDialog(userMode, userSuffix, DateTokens.CutoffHour))
+        using (SettingsDialog d = new SettingsDialog(this, userMode, userSuffix, DateTokens.CutoffHour))
         {
             if (d.ShowDialog(this) != DialogResult.OK) return;
             userMode = d.UserMode;
@@ -1534,15 +1810,18 @@ class MainForm : Form
 
     void ShowIdleStatus()
     {
+        HideUndo();
         status.ForeColor = Theme.Muted;
         status.Text = manage ? ManageHint : "";
     }
 
     void Flash(string msg, bool err)
     {
+        HideUndo();
         status.ForeColor = err ? Color.Firebrick : Theme.Clay;
         status.Text = msg;
         tip.Stop();
+        tip.Interval = 1600;
         tip.Start();
     }
 }
