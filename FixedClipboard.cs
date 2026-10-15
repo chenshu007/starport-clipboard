@@ -118,10 +118,16 @@ class Card : Control
         SetStyle(ControlStyles.Selectable, false);
         BackColor = Theme.Bg;
         Cursor = Cursors.Hand;
-        Height = p.En.Length > 0 ? 58 : 44;
+        Height = HeightFor(p);
     }
 
-    int BoxH { get { return Height - 6; } }  // 卡片之间留 6px 间距
+    public const int Gap = 4;  // 卡片之间的间距
+    public static int HeightFor(Phrase p) { return p.En.Length > 0 ? 52 : 40; }
+
+    int BoxH { get { return Height - Gap; } }
+
+    // 卡片位置变化（列表滚动）时重绘，以便更新底部渐隐
+    protected override void OnLocationChanged(EventArgs e) { base.OnLocationChanged(e); Invalidate(); }
 
     // 右侧按钮区的位置只取决于卡片尺寸，与悬停无关，所以不会跳动
     Rectangle EnRect { get { return new Rectangle(Width - 42, (BoxH - 22) / 2, 32, 22); } }
@@ -209,7 +215,8 @@ class Card : Control
             g.DrawPath(pen, path);
         }
 
-        Theme.Text(g, Index < 9 ? (Index + 1).ToString() : "·", Theme.Num,
+        // 序号对应键盘最上排 1 2 3 … 9 0；第 11 张起不显示序号
+        Theme.Text(g, Index < 9 ? (Index + 1).ToString() : (Index == 9 ? "0" : ""), Theme.Num,
             new Rectangle(6, 0, 28, h), Theme.Clay, TextFormatFlags.HorizontalCenter);
 
         if (Manage)
@@ -232,12 +239,25 @@ class Card : Control
         Rectangle t = TextArea;
         if (P.En.Length > 0)
         {
-            Theme.Text(g, ZhText, Theme.Zh, new Rectangle(t.X, 6, t.Width, 24), Theme.Ink, TextFormatFlags.Left);
-            Theme.Text(g, EnText, Theme.En, new Rectangle(t.X, 29, t.Width, 18), Theme.Muted, TextFormatFlags.Left);
+            Theme.Text(g, ZhText, Theme.Zh, new Rectangle(t.X, 4, t.Width, 23), Theme.Ink, TextFormatFlags.Left);
+            Theme.Text(g, EnText, Theme.En, new Rectangle(t.X, 26, t.Width, 18), Theme.Muted, TextFormatFlags.Left);
         }
         else
         {
             Theme.Text(g, ZhText, Theme.Zh, t, Theme.Ink, TextFormatFlags.Left);
+        }
+
+        if (Parent != null)
+        {
+            int viewBottom = Parent.ClientSize.Height - Top;  // 列表可视区底边在卡片坐标中的位置
+            if (viewBottom > 0 && viewBottom < Height)
+            {
+                Rectangle fade = new Rectangle(0, viewBottom - 28, Width, 28);
+                using (LinearGradientBrush lb = new LinearGradientBrush(
+                    new Rectangle(fade.X, fade.Y - 1, fade.Width, fade.Height + 2),
+                    Color.FromArgb(0, Theme.Bg), Theme.Bg, LinearGradientMode.Vertical))
+                    g.FillRectangle(lb, fade);
+            }
         }
     }
 }
@@ -684,7 +704,7 @@ class MainForm : Form
     const int MA_NOACTIVATE = 3;
     const int HTCLIENT = 1;
     const int FormW = 380, HeaderH = 80, FooterH = 52, ContextBarH = 34, ImageAreaH = 216;
-    const int MaxVisibleCards = 9, MaxPhrases = 20, MaxImages = 6, MaxImageSide = 2560;
+    const int MaxVisibleCards = 10, MaxPhrases = 20, MaxImages = 6, MaxImageSide = 2560;
 
     static readonly string[] Defaults =
     {
@@ -1290,12 +1310,12 @@ class MainForm : Form
         int visibleH = 10;
         for (int i = 0; i < phrases.Count; i++)
         {
-            int ch = phrases[i].En.Length > 0 ? 58 : 44;
+            int ch = Card.HeightFor(phrases[i]);
             totalCardH += ch;
             if (i < MaxVisibleCards) visibleH += ch;
         }
         totalCardH += 4;
-        visibleH += 4;
+        visibleH += phrases.Count > MaxVisibleCards ? 18 : 4;  // 还有更多时露出下一张的一截
 
         // 整个窗口最多占屏幕工作区 85%；展开图片区时列表让出高度，改为滚动
         Rectangle wa = Screen.FromControl(this).WorkingArea;
@@ -1437,12 +1457,13 @@ class MainForm : Form
         Rebuild();
     }
 
-    // 数字键 1–9 复制对应中文（窗口激活时有效，例如刚拖动过标题栏）
+    // 数字键 1–9、0 复制对应中文（窗口激活时有效，例如刚拖动过标题栏）
     void OnKey(object sender, KeyEventArgs e)
     {
         int n = -1;
         if (e.KeyCode >= Keys.D1 && e.KeyCode <= Keys.D9) n = e.KeyCode - Keys.D1;
         else if (e.KeyCode >= Keys.NumPad1 && e.KeyCode <= Keys.NumPad9) n = e.KeyCode - Keys.NumPad1;
+        else if (e.KeyCode == Keys.D0 || e.KeyCode == Keys.NumPad0) n = 9;
         if (!manage && n >= 0 && n < phrases.Count) { CopyText(phrases[n], false); e.Handled = true; }
     }
 
