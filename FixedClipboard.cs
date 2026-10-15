@@ -57,24 +57,27 @@ class Phrase
     public Phrase(string zh, string en, int count) { Zh = zh; En = en; Count = count; }
 }
 
-// 一条词条卡片：主体 = 复制中文，EN 标签 = 复制英文，悬停时显示 ✎ ✕
+// 一条词条卡片。
+// 平时：主体 = 复制中文，EN = 复制英文，位置固定不动。
+// 管理模式：不复制；主体或 ✎ = 编辑，✕ = 删除。
 class Card : Control
 {
     enum Zone { None, Body, En, Edit, Del }
 
     public readonly Phrase P;
     public readonly int Index;
+    public readonly bool Manage;
     public event Action<Card, string> CopyRequested;
     public event Action<Card> EditRequested, DeleteRequested;
 
     bool hover;
     Zone zone;
-    Rectangle rEn, rEdit, rDel;
 
-    public Card(Phrase p, int index)
+    public Card(Phrase p, int index, bool manage)
     {
         P = p;
         Index = index;
+        Manage = manage;
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
                  ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
         SetStyle(ControlStyles.Selectable, false);
@@ -83,12 +86,44 @@ class Card : Control
         Height = p.En.Length > 0 ? 58 : 44;
     }
 
+    int BoxH { get { return Height - 6; } }  // 卡片之间留 6px 间距
+
+    // 右侧按钮区的位置只取决于卡片尺寸，与悬停无关，所以不会跳动
+    Rectangle EnRect { get { return new Rectangle(Width - 42, (BoxH - 22) / 2, 32, 22); } }
+    Rectangle DelRect { get { return new Rectangle(Width - 38, (BoxH - 28) / 2, 28, 28); } }
+    Rectangle EditRect { get { return new Rectangle(Width - 68, (BoxH - 28) / 2, 28, 28); } }
+
+    Rectangle TextArea
+    {
+        get
+        {
+            int right = Manage ? EditRect.Left - 6 : (P.En.Length > 0 ? EnRect.Left - 8 : Width - 12);
+            return new Rectangle(38, 0, Math.Max(10, right - 38), BoxH);
+        }
+    }
+
+    // 文字是否被省略号截断（只有截断时才需要提示框）
+    public bool IsTruncated
+    {
+        get
+        {
+            int w = TextArea.Width;
+            const TextFormatFlags f = TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix;
+            return TextRenderer.MeasureText(P.Zh, Theme.Zh, Size.Empty, f).Width > w ||
+                   (P.En.Length > 0 && TextRenderer.MeasureText(P.En, Theme.En, Size.Empty, f).Width > w);
+        }
+    }
+
     Zone HitTest(Point pt)
     {
-        if (!ClientRectangle.Contains(pt)) return Zone.None;
-        if (hover && rDel.Contains(pt)) return Zone.Del;
-        if (hover && rEdit.Contains(pt)) return Zone.Edit;
-        if (P.En.Length > 0 && rEn.Contains(pt)) return Zone.En;
+        if (!ClientRectangle.Contains(pt) || pt.Y >= BoxH) return Zone.None;
+        if (Manage)
+        {
+            if (DelRect.Contains(pt)) return Zone.Del;
+            if (EditRect.Contains(pt)) return Zone.Edit;
+            return Zone.Body;
+        }
+        if (P.En.Length > 0 && EnRect.Contains(pt)) return Zone.En;
         return Zone.Body;
     }
 
@@ -108,7 +143,10 @@ class Card : Control
         if (e.Button != MouseButtons.Left) return;
         switch (HitTest(e.Location))
         {
-            case Zone.Body: if (CopyRequested != null) CopyRequested(this, P.Zh); break;
+            case Zone.Body:
+                if (Manage) { if (EditRequested != null) EditRequested(this); }
+                else if (CopyRequested != null) CopyRequested(this, P.Zh);
+                break;
             case Zone.En: if (CopyRequested != null) CopyRequested(this, P.En); break;
             case Zone.Edit: if (EditRequested != null) EditRequested(this); break;
             case Zone.Del: if (DeleteRequested != null) DeleteRequested(this); break;
@@ -121,12 +159,13 @@ class Card : Control
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.Clear(Theme.Bg);
 
-        int h = Height - 6;  // 卡片之间留 6px 间距
+        int h = BoxH;
         RectangleF box = new RectangleF(0.5f, 0.5f, Width - 1.5f, h - 1);
         using (GraphicsPath path = Theme.Round(box, 10))
         using (SolidBrush b = new SolidBrush(hover ? Theme.CardHover : Theme.Card))
         using (Pen pen = new Pen(hover ? Theme.Clay : Theme.Line))
         {
+            if (Manage) pen.DashStyle = DashStyle.Dash;  // 虚线边框，一眼看出处于管理模式
             g.FillPath(b, path);
             g.DrawPath(pen, path);
         }
@@ -134,54 +173,41 @@ class Card : Control
         Theme.Text(g, Index < 9 ? (Index + 1).ToString() : "·", Theme.Num,
             new Rectangle(6, 0, 28, h), Theme.Clay, TextFormatFlags.HorizontalCenter);
 
-        int right = Width - 10;
-        if (hover)
+        if (Manage)
         {
-            rDel = new Rectangle(right - 26, (h - 26) / 2, 26, 26);
-            rEdit = new Rectangle(right - 54, (h - 26) / 2, 26, 26);
-            Theme.Text(g, "✕", Theme.Sym, rDel, zone == Zone.Del ? Color.Firebrick : Theme.Muted, TextFormatFlags.HorizontalCenter);
-            Theme.Text(g, "✎", Theme.Sym, rEdit, zone == Zone.Edit ? Theme.Clay : Theme.Muted, TextFormatFlags.HorizontalCenter);
-            right -= 58;
+            Theme.Text(g, "✎", Theme.Sym, EditRect, zone == Zone.Edit || zone == Zone.Body ? Theme.Clay : Theme.Muted, TextFormatFlags.HorizontalCenter);
+            Theme.Text(g, "✕", Theme.Sym, DelRect, zone == Zone.Del ? Color.Firebrick : Theme.Muted, TextFormatFlags.HorizontalCenter);
         }
-        else
+        else if (P.En.Length > 0)
         {
-            rDel = rEdit = Rectangle.Empty;
-        }
-
-        if (P.En.Length > 0)
-        {
-            rEn = new Rectangle(right - 32, (h - 22) / 2, 32, 22);
-            using (GraphicsPath chip = Theme.Round(new RectangleF(rEn.X + 0.5f, rEn.Y + 0.5f, rEn.Width - 1, rEn.Height - 1), 11))
+            Rectangle r = EnRect;
+            using (GraphicsPath chip = Theme.Round(new RectangleF(r.X + 0.5f, r.Y + 0.5f, r.Width - 1, r.Height - 1), 11))
             {
                 if (zone == Zone.En)
                     using (SolidBrush cb = new SolidBrush(Theme.Clay)) g.FillPath(cb, chip);
                 using (Pen cp = new Pen(Theme.Clay)) g.DrawPath(cp, chip);
             }
-            Theme.Text(g, "EN", Theme.Chip, rEn, zone == Zone.En ? Color.White : Theme.Clay, TextFormatFlags.HorizontalCenter);
-            right -= 40;
-        }
-        else
-        {
-            rEn = Rectangle.Empty;
+            Theme.Text(g, "EN", Theme.Chip, r, zone == Zone.En ? Color.White : Theme.Clay, TextFormatFlags.HorizontalCenter);
         }
 
-        int left = 38, w = Math.Max(10, right - left);
+        Rectangle t = TextArea;
         if (P.En.Length > 0)
         {
-            Theme.Text(g, P.Zh, Theme.Zh, new Rectangle(left, 6, w, 24), Theme.Ink, TextFormatFlags.Left);
-            Theme.Text(g, P.En, Theme.En, new Rectangle(left, 29, w, 18), Theme.Muted, TextFormatFlags.Left);
+            Theme.Text(g, P.Zh, Theme.Zh, new Rectangle(t.X, 6, t.Width, 24), Theme.Ink, TextFormatFlags.Left);
+            Theme.Text(g, P.En, Theme.En, new Rectangle(t.X, 29, t.Width, 18), Theme.Muted, TextFormatFlags.Left);
         }
         else
         {
-            Theme.Text(g, P.Zh, Theme.Zh, new Rectangle(left, 0, w, h), Theme.Ink, TextFormatFlags.Left);
+            Theme.Text(g, P.Zh, Theme.Zh, t, Theme.Ink, TextFormatFlags.Left);
         }
     }
 }
 
-// 圆角橙色按钮
+// 圆角按钮：实心橙色，或 Outline = 橙色描边
 class PillButton : Control
 {
     bool hover;
+    public bool Outline;
 
     public PillButton(string text)
     {
@@ -202,9 +228,18 @@ class PillButton : Control
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.Clear(Parent != null ? Parent.BackColor : Theme.Bg);
         using (GraphicsPath p = Theme.Round(new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f), (Height - 1) / 2f))
-        using (SolidBrush b = new SolidBrush(hover ? Theme.ClayDark : Theme.Clay))
-            g.FillPath(b, p);
-        Theme.Text(g, Text, Font, ClientRectangle, Color.White, TextFormatFlags.HorizontalCenter);
+        {
+            if (Outline)
+            {
+                if (hover) using (SolidBrush b = new SolidBrush(Theme.CardHover)) g.FillPath(b, p);
+                using (Pen pen = new Pen(Theme.Clay)) g.DrawPath(pen, p);
+            }
+            else
+            {
+                using (SolidBrush b = new SolidBrush(hover ? Theme.ClayDark : Theme.Clay)) g.FillPath(b, p);
+            }
+        }
+        Theme.Text(g, Text, Font, ClientRectangle, Outline ? Theme.Clay : Color.White, TextFormatFlags.HorizontalCenter);
     }
 }
 
@@ -290,7 +325,7 @@ class MainForm : Form
     const int WM_MOUSEACTIVATE = 0x21;
     const int MA_NOACTIVATE = 3;
     const int HTCLIENT = 1;
-    const int FormW = 360, HeaderH = 80, FooterH = 52;
+    const int FormW = 380, HeaderH = 80, FooterH = 52;
 
     static readonly string[] Defaults =
     {
@@ -311,6 +346,9 @@ class MainForm : Form
     readonly Panel footer = new Panel();
     readonly Label status = new Label();
     readonly PillButton btnAdd = new PillButton("＋ 新增");
+    readonly PillButton btnManage = new PillButton("管理");
+    bool manage;  // 管理模式：卡片只编辑/删除，不复制
+    const string ManageHint = "管理中 · 点卡片编辑";
     readonly System.Windows.Forms.Timer tip = new System.Windows.Forms.Timer();
     readonly ToolTip toolTip = new ToolTip();
     Image logo;
@@ -348,6 +386,7 @@ class MainForm : Form
         catch { }
 
         toolTip.ShowAlways = true;  // 窗口不激活时也显示完整文字
+        toolTip.InitialDelay = 700;
 
         header.Dock = DockStyle.Top;
         header.Height = HeaderH;
@@ -362,12 +401,16 @@ class MainForm : Form
         {
             using (Pen p = new Pen(Theme.Line)) e.Graphics.DrawLine(p, 0, 0, footer.Width, 0);
         };
-        status.SetBounds(14, 15, FormW - 130, 22);
+        status.SetBounds(14, 15, FormW - 196, 22);
         status.ForeColor = Theme.Clay;
         status.AutoEllipsis = true;
         btnAdd.SetBounds(FormW - 106, 11, 92, 30);
         btnAdd.Click += delegate { AddPhrase(); };
+        btnManage.Outline = true;
+        btnManage.SetBounds(FormW - 178, 11, 64, 30);
+        btnManage.Click += delegate { SetManage(!manage); };
         footer.Controls.Add(status);
+        footer.Controls.Add(btnManage);
         footer.Controls.Add(btnAdd);
 
         Controls.Add(list);
@@ -375,7 +418,7 @@ class MainForm : Form
         Controls.Add(footer);
 
         tip.Interval = 1600;
-        tip.Tick += delegate { tip.Stop(); status.Text = ""; };
+        tip.Tick += delegate { tip.Stop(); ShowIdleStatus(); };
 
         KeyDown += OnKey;
         LoadPhrases();
@@ -464,12 +507,11 @@ class MainForm : Form
         int total = 10;
         for (int i = 0; i < phrases.Count; i++)
         {
-            Card c = new Card(phrases[i], i);
+            Card c = new Card(phrases[i], i, manage);
             c.CopyRequested += delegate(Card k, string s) { CopyText(k.P, s); };
             // 编辑/删除会重建卡片，延后执行，避免在卡片自身的鼠标事件里销毁它
             c.EditRequested += delegate(Card k) { BeginInvoke((MethodInvoker)delegate { EditPhrase(k.P); }); };
             c.DeleteRequested += delegate(Card k) { BeginInvoke((MethodInvoker)delegate { RemovePhrase(k.P); }); };
-            toolTip.SetToolTip(c, phrases[i].En.Length > 0 ? phrases[i].Zh + "\n" + phrases[i].En : phrases[i].Zh);
             cards.Add(c);
             total += c.Height;
         }
@@ -483,6 +525,8 @@ class MainForm : Form
         foreach (Card c in cards)
         {
             c.SetBounds(14, y, cardW, c.Height);
+            // 只有文字被截断的卡片才显示完整内容提示
+            toolTip.SetToolTip(c, c.IsTruncated ? (c.P.En.Length > 0 ? c.P.Zh + "\n" + c.P.En : c.P.Zh) : null);
             y += c.Height;
             list.Controls.Add(c);
         }
@@ -559,7 +603,24 @@ class MainForm : Form
         int n = -1;
         if (e.KeyCode >= Keys.D1 && e.KeyCode <= Keys.D9) n = e.KeyCode - Keys.D1;
         else if (e.KeyCode >= Keys.NumPad1 && e.KeyCode <= Keys.NumPad9) n = e.KeyCode - Keys.NumPad1;
-        if (n >= 0 && n < phrases.Count) { CopyText(phrases[n], phrases[n].Zh); e.Handled = true; }
+        if (!manage && n >= 0 && n < phrases.Count) { CopyText(phrases[n], phrases[n].Zh); e.Handled = true; }
+    }
+
+    void SetManage(bool on)
+    {
+        manage = on;
+        btnManage.Text = on ? "完成" : "管理";
+        btnManage.Outline = !on;
+        btnManage.Invalidate();
+        Rebuild();
+        tip.Stop();
+        ShowIdleStatus();
+    }
+
+    void ShowIdleStatus()
+    {
+        status.ForeColor = Theme.Muted;
+        status.Text = manage ? ManageHint : "";
     }
 
     void Flash(string msg, bool err)
