@@ -884,6 +884,7 @@ class MainForm : Form
         header.Dock = DockStyle.Top;
         header.Height = HeaderH;
         header.Paint += PaintHeader;
+        header.MouseUp += OnHeaderClick;
         btnPin.Font = Theme.Sym;
         btnPin.SetBounds(FormW - 84, 12, 32, 32);
         btnPin.Click += delegate { ToggleTopMost(); };
@@ -1087,6 +1088,26 @@ class MainForm : Form
         Theme.Text(g, "前沿剪贴板研究实验室", Theme.Small, new Rectangle(x + 1, 33, w, 20), Theme.Muted, TextFormatFlags.Left);
         Theme.Text(g, "Putting safety at the frontier desk.", Theme.En, new Rectangle(x + 1, 52, w, 18), Theme.Clay, TextFormatFlags.Left);
         using (Pen p = new Pen(Theme.Line)) g.DrawLine(p, 0, header.Height - 1, header.Width, header.Height - 1);
+    }
+
+    // 彩蛋：连续点击顶部 logo / 标题 5 次（每次间隔不超过 0.8 秒）打开官网
+    int headerClicks;
+    DateTime lastHeaderClick;
+
+    void OnHeaderClick(object sender, MouseEventArgs e)
+    {
+        if (e.Button != MouseButtons.Left) return;
+        DateTime now = DateTime.Now;
+        headerClicks = (now - lastHeaderClick).TotalMilliseconds <= 800 ? headerClicks + 1 : 1;
+        lastHeaderClick = now;
+        if (headerClicks < 5) return;
+        headerClicks = 0;
+        try
+        {
+            System.Diagnostics.Process.Start("https://" + Website);
+            Flash("正在打开 " + Website, false);
+        }
+        catch { Flash("无法打开浏览器", true); }
     }
 
     void UpdatePinButton()
