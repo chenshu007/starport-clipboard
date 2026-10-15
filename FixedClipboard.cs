@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -50,6 +51,35 @@ static class Theme
     }
 }
 
+// 日期占位符：{今天}/{today}、{明天}/{tomorrow}
+// 中文栏显示「10月15日」，英文栏显示「15 Oct」；凌晨分界时间前算作前一个营业日
+static class DateTokens
+{
+    public static int CutoffHour;  // 0 = 按日历日期
+
+    public static DateTime BusinessDate
+    {
+        get
+        {
+            DateTime now = DateTime.Now;
+            return (now.Hour < CutoffHour ? now.AddDays(-1) : now).Date;
+        }
+    }
+
+    static string Fmt(DateTime d, bool en)
+    {
+        return en ? d.ToString("d MMM", CultureInfo.InvariantCulture) : d.Month + "月" + d.Day + "日";
+    }
+
+    public static string Expand(string text, bool en)
+    {
+        if (text.IndexOf('{') < 0) return text;
+        DateTime today = BusinessDate;
+        string t = Fmt(today, en), m = Fmt(today.AddDays(1), en);
+        return text.Replace("{今天}", t).Replace("{today}", t).Replace("{明天}", m).Replace("{tomorrow}", m);
+    }
+}
+
 class Phrase
 {
     public string Zh, En;
@@ -67,7 +97,7 @@ class Card : Control
     public readonly Phrase P;
     public readonly int Index;
     public readonly bool Manage;
-    public event Action<Card, string> CopyRequested;
+    public event Action<Card, bool> CopyRequested;  // bool = 是否英文
     public event Action<Card> EditRequested, DeleteRequested;
 
     bool hover;
@@ -103,14 +133,17 @@ class Card : Control
     }
 
     // 文字是否被省略号截断（只有截断时才需要提示框）
+    public string ZhText { get { return DateTokens.Expand(P.Zh, false); } }
+    public string EnText { get { return DateTokens.Expand(P.En, true); } }
+
     public bool IsTruncated
     {
         get
         {
             int w = TextArea.Width;
             const TextFormatFlags f = TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix;
-            return TextRenderer.MeasureText(P.Zh, Theme.Zh, Size.Empty, f).Width > w ||
-                   (P.En.Length > 0 && TextRenderer.MeasureText(P.En, Theme.En, Size.Empty, f).Width > w);
+            return TextRenderer.MeasureText(ZhText, Theme.Zh, Size.Empty, f).Width > w ||
+                   (P.En.Length > 0 && TextRenderer.MeasureText(EnText, Theme.En, Size.Empty, f).Width > w);
         }
     }
 
@@ -145,9 +178,9 @@ class Card : Control
         {
             case Zone.Body:
                 if (Manage) { if (EditRequested != null) EditRequested(this); }
-                else if (CopyRequested != null) CopyRequested(this, P.Zh);
+                else if (CopyRequested != null) CopyRequested(this, false);
                 break;
-            case Zone.En: if (CopyRequested != null) CopyRequested(this, P.En); break;
+            case Zone.En: if (CopyRequested != null) CopyRequested(this, true); break;
             case Zone.Edit: if (EditRequested != null) EditRequested(this); break;
             case Zone.Del: if (DeleteRequested != null) DeleteRequested(this); break;
         }
@@ -193,12 +226,12 @@ class Card : Control
         Rectangle t = TextArea;
         if (P.En.Length > 0)
         {
-            Theme.Text(g, P.Zh, Theme.Zh, new Rectangle(t.X, 6, t.Width, 24), Theme.Ink, TextFormatFlags.Left);
-            Theme.Text(g, P.En, Theme.En, new Rectangle(t.X, 29, t.Width, 18), Theme.Muted, TextFormatFlags.Left);
+            Theme.Text(g, ZhText, Theme.Zh, new Rectangle(t.X, 6, t.Width, 24), Theme.Ink, TextFormatFlags.Left);
+            Theme.Text(g, EnText, Theme.En, new Rectangle(t.X, 29, t.Width, 18), Theme.Muted, TextFormatFlags.Left);
         }
         else
         {
-            Theme.Text(g, P.Zh, Theme.Zh, t, Theme.Ink, TextFormatFlags.Left);
+            Theme.Text(g, ZhText, Theme.Zh, t, Theme.Ink, TextFormatFlags.Left);
         }
     }
 }
@@ -326,11 +359,14 @@ class SettingsDialog : Form
     readonly CheckBox chk = new CheckBox();
     readonly TextBox tSuffix = new TextBox();
     readonly Label preview = new Label();
+    readonly NumericUpDown numCutoff = new NumericUpDown();
 
     public bool UserMode { get { return chk.Checked; } }
     public string Suffix { get { return tSuffix.Text.Replace("\r", "").Replace("\n", "").Trim(); } }
 
-    public SettingsDialog(bool userMode, string suffix)
+    public int CutoffHour { get { return (int)numCutoff.Value; } }
+
+    public SettingsDialog(bool userMode, string suffix, int cutoffHour)
     {
         Text = "设置";
         Font = Theme.Small;
@@ -341,7 +377,7 @@ class SettingsDialog : Form
         ShowInTaskbar = false;
         TopMost = true;
         AutoScaleMode = AutoScaleMode.None;
-        ClientSize = new Size(340, 230);
+        ClientSize = new Size(340, 320);
 
         chk.Text = "用户模式：复制时自动在末尾加上后缀";
         chk.SetBounds(20, 16, 300, 24);
@@ -358,27 +394,42 @@ class SettingsDialog : Form
         preview.SetBounds(20, 108, 300, 40);
         preview.ForeColor = Theme.Clay;
 
+        Label lc = new Label();
+        lc.Text = "营业日分界：凌晨";
+        lc.SetBounds(20, 166, 104, 22);
+        numCutoff.SetBounds(124, 163, 48, 26);
+        Label lcEnd = new Label();
+        lcEnd.Text = "点前，{今天} 仍算前一天";
+        lcEnd.SetBounds(176, 166, 160, 22);
+        numCutoff.Minimum = 0;
+        numCutoff.Maximum = 6;
+        numCutoff.Value = Math.Max(0, Math.Min(6, cutoffHour));
+        Label lc2 = new Label();
+        lc2.Text = "0 = 按日历日期。词条里可写 {今天} {明天} 自动填日期";
+        lc2.ForeColor = Theme.Muted;
+        lc2.SetBounds(20, 196, 320, 40);
+
         Button ok = new Button();
         ok.Text = "保存";
         ok.FlatStyle = FlatStyle.Flat;
         ok.FlatAppearance.BorderColor = Theme.Line;
         ok.BackColor = Theme.Clay;
         ok.ForeColor = Color.White;
-        ok.SetBounds(214, 180, 106, 32);
+        ok.SetBounds(214, 270, 106, 32);
         ok.DialogResult = DialogResult.OK;
         Button cancel = new Button();
         cancel.Text = "取消";
         cancel.FlatStyle = FlatStyle.Flat;
         cancel.FlatAppearance.BorderColor = Theme.Line;
         cancel.BackColor = Color.White;
-        cancel.SetBounds(100, 180, 106, 32);
+        cancel.SetBounds(100, 270, 106, 32);
         cancel.DialogResult = DialogResult.Cancel;
 
         chk.CheckedChanged += delegate { UpdatePreview(); };
         tSuffix.TextChanged += delegate { UpdatePreview(); };
         UpdatePreview();
 
-        Controls.AddRange(new Control[] { chk, l, tSuffix, preview, ok, cancel });
+        Controls.AddRange(new Control[] { chk, l, tSuffix, preview, numCutoff, lc, lcEnd, lc2, ok, cancel });
         AcceptButton = ok;
         CancelButton = cancel;
     }
@@ -415,7 +466,19 @@ class MainForm : Form
         "客人遗落物品不要了|Guest does not want the left items",
         "借用酒店的充电器在前台|Hotel charger on loan – return to front desk",
         "无视请勿打扰（DND），进行查房|Override DND – proceed with room check",
+        "提前退房 {今天}|Early out {today}",
+        "加购2份自助早餐 {明天}|2 EBF {tomorrow}",
     };
+
+    // 默认词条版本：升级后给老用户补上新增的默认词条（只补一次）
+    const int DefaultsVersion = 2;
+    static readonly string[] DefaultsV2 =
+    {
+        "提前退房 {今天}|Early out {today}",
+        "加购2份自助早餐 {明天}|2 EBF {tomorrow}",
+    };
+    int defaultsVersion = 1;
+    DateTime shownDate;
 
     readonly string file = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "phrases.txt");
     readonly List<Phrase> phrases = new List<Phrase>();
@@ -505,6 +568,17 @@ class MainForm : Form
         Controls.Add(header);
         Controls.Add(footer);
 
+        shownDate = DateTokens.BusinessDate;
+        System.Windows.Forms.Timer dayTimer = new System.Windows.Forms.Timer();
+        dayTimer.Interval = 30000;
+        dayTimer.Tick += delegate
+        {
+            if (DateTokens.BusinessDate == shownDate) return;
+            shownDate = DateTokens.BusinessDate;
+            foreach (Control c in list.Controls) c.Invalidate();
+        };
+        dayTimer.Start();
+
         tip.Interval = 1600;
         tip.Tick += delegate { tip.Stop(); ShowIdleStatus(); };
 
@@ -553,6 +627,8 @@ class MainForm : Form
                 // 设置行：#user_mode=1、#user_suffix=后缀
                 if (line.StartsWith("#user_mode=")) { userMode = line.Substring(11).Trim() == "1"; continue; }
                 if (line.StartsWith("#user_suffix=")) { userSuffix = line.Substring(13).Trim(); continue; }
+                if (line.StartsWith("#day_cutoff=")) { int.TryParse(line.Substring(12).Trim(), out DateTokens.CutoffHour); continue; }
+                if (line.StartsWith("#defaults=")) { int.TryParse(line.Substring(10).Trim(), out defaultsVersion); continue; }
                 string[] parts = line.Split('|');
                 string zh = parts[0].Trim();
                 if (zh.Length == 0) continue;
@@ -561,8 +637,21 @@ class MainForm : Form
                 if (parts.Length > 2) int.TryParse(parts[2].Trim(), out n);
                 phrases.Add(new Phrase(zh, en, Math.Max(0, n)));
             }
-            if (!File.Exists(file)) Save();
-            else HideFile();  // 旧版本留下的可见 phrases.txt 也设为隐藏
+            if (!File.Exists(file)) { defaultsVersion = DefaultsVersion; Save(); }
+            else
+            {
+                if (defaultsVersion < 2)
+                {
+                    foreach (string d in DefaultsV2)
+                    {
+                        string[] parts = d.Split('|');
+                        if (!Exists(parts[0], null)) phrases.Add(new Phrase(parts[0], parts[1], 0));
+                    }
+                    defaultsVersion = DefaultsVersion;
+                    Save();
+                }
+                HideFile();  // 旧版本留下的可见 phrases.txt 也设为隐藏
+            }
         }
         catch { Flash("读取 phrases.txt 失败", true); }
 
@@ -590,6 +679,8 @@ class MainForm : Form
             List<string> lines = new List<string>();
             lines.Add("#user_mode=" + (userMode ? "1" : "0"));
             lines.Add("#user_suffix=" + userSuffix);
+            lines.Add("#day_cutoff=" + DateTokens.CutoffHour);
+            lines.Add("#defaults=" + defaultsVersion);
             foreach (Phrase p in phrases)
                 lines.Add(p.Zh + "|" + p.En + "|" + p.Count);
             // 隐藏文件不能用 File.WriteAllLines 覆盖（会拒绝访问），改为打开后截断再写
@@ -616,7 +707,7 @@ class MainForm : Form
         for (int i = 0; i < phrases.Count; i++)
         {
             Card c = new Card(phrases[i], i, manage);
-            c.CopyRequested += delegate(Card k, string s) { CopyText(k.P, s); };
+            c.CopyRequested += delegate(Card k, bool en) { CopyText(k.P, en); };
             // 编辑/删除会重建卡片，延后执行，避免在卡片自身的鼠标事件里销毁它
             c.EditRequested += delegate(Card k) { BeginInvoke((MethodInvoker)delegate { EditPhrase(k.P); }); };
             c.DeleteRequested += delegate(Card k) { BeginInvoke((MethodInvoker)delegate { RemovePhrase(k.P); }); };
@@ -634,7 +725,7 @@ class MainForm : Form
         {
             c.SetBounds(14, y, cardW, c.Height);
             // 只有文字被截断的卡片才显示完整内容提示
-            toolTip.SetToolTip(c, c.IsTruncated ? (c.P.En.Length > 0 ? c.P.Zh + "\n" + c.P.En : c.P.Zh) : null);
+            toolTip.SetToolTip(c, c.IsTruncated ? (c.P.En.Length > 0 ? c.ZhText + "\n" + c.EnText : c.ZhText) : null);
             y += c.Height;
             list.Controls.Add(c);
         }
@@ -642,8 +733,9 @@ class MainForm : Form
         ClientSize = new Size(FormW, HeaderH + listH + FooterH);
     }
 
-    void CopyText(Phrase p, string s)
+    void CopyText(Phrase p, bool en)
     {
+        string s = DateTokens.Expand(en ? p.En : p.Zh, en);
         for (int n = 0; n < 5; n++)
         {
             try
@@ -711,7 +803,7 @@ class MainForm : Form
         int n = -1;
         if (e.KeyCode >= Keys.D1 && e.KeyCode <= Keys.D9) n = e.KeyCode - Keys.D1;
         else if (e.KeyCode >= Keys.NumPad1 && e.KeyCode <= Keys.NumPad9) n = e.KeyCode - Keys.NumPad1;
-        if (!manage && n >= 0 && n < phrases.Count) { CopyText(phrases[n], phrases[n].Zh); e.Handled = true; }
+        if (!manage && n >= 0 && n < phrases.Count) { CopyText(phrases[n], false); e.Handled = true; }
     }
 
     // 用户模式下在末尾加后缀（用空格隔开）；状态栏和卡片仍只显示原文
@@ -722,11 +814,13 @@ class MainForm : Form
 
     void OpenSettings()
     {
-        using (SettingsDialog d = new SettingsDialog(userMode, userSuffix))
+        using (SettingsDialog d = new SettingsDialog(userMode, userSuffix, DateTokens.CutoffHour))
         {
             if (d.ShowDialog(this) != DialogResult.OK) return;
             userMode = d.UserMode;
             userSuffix = d.Suffix;
+            DateTokens.CutoffHour = d.CutoffHour;
+            Rebuild();  // 分界时间变了，卡片上的日期可能要更新
             Save();
             Flash("设置已保存", false);
         }
