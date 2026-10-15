@@ -23,8 +23,8 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: FixedClipboard
-          path: FixedClipboard.exe
+          name: StarportHaiku
+          path: StarportHaiku.exe
 
       - name: Publish release for new VERSION
         if: github.event_name == 'push'
@@ -37,9 +37,11 @@ jobs:
             echo "$TAG 已发布过，跳过（发新版请修改 VERSION）"
             exit 0
           fi
-          7z a "FixedClipboard-$TAG.zip" FixedClipboard.exe
-          gh release create "$TAG" FixedClipboard.exe "FixedClipboard-$TAG.zip" \
-            --target "$GITHUB_SHA" --title "Starport 固定剪贴板 $TAG" --generate-notes
+          7z a "StarportHaiku-$TAG.zip" StarportHaiku.exe
+          # 同时附上旧文件名 FixedClipboard.exe，旧的固定下载链接也能拿到最新版
+          cp StarportHaiku.exe FixedClipboard.exe
+          gh release create "$TAG" StarportHaiku.exe "StarportHaiku-$TAG.zip" FixedClipboard.exe \
+            --target "$GITHUB_SHA" --title "Starport Haiku $TAG" --generate-notes
 
       - name: Attach exe to manually created release
         if: github.event_name == 'release'
@@ -48,5 +50,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name }}
         run: |
-          7z a "FixedClipboard-$TAG.zip" FixedClipboard.exe
-          gh release upload "$TAG" FixedClipboard.exe "FixedClipboard-$TAG.zip" --clobber
+          7z a "StarportHaiku-$TAG.zip" StarportHaiku.exe
+          cp StarportHaiku.exe FixedClipboard.exe
+          gh release upload "$TAG" StarportHaiku.exe "StarportHaiku-$TAG.zip" FixedClipboard.exe --clobber

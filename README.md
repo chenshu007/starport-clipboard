@@ -1,4 +1,6 @@
-# Starport 固定剪贴板
+# Starport Haiku
+
+> 固定剪贴板 · 像俳句一样短的常用语，一点即复制
 
 酒店前台用的 Windows 小工具：常用语一键复制到剪贴板，再到任意软件里 Ctrl+V。
 
@@ -24,7 +26,11 @@
 
 ## 下载
 
-到 [Releases](../../releases/latest) 下载 `FixedClipboard.exe`，放进任意文件夹双击运行。
+到 [Releases](../../releases/latest) 下载 `StarportHaiku.exe`，放进任意文件夹双击运行。
+
+固定下载链接：<https://github.com/chenshu007/starport-clipboard/releases/latest/download/StarportHaiku.exe>（旧链接 `FixedClipboard.exe` 仍可用）。
+
+从旧版升级：把新 exe 放进原来的文件夹即可，词条按文件夹保存，不受 exe 改名影响；记得删掉旧的 `FixedClipboard.exe` 并重建桌面快捷方式。
 
 需要 .NET Framework 4.x，Windows 10/11 已自带。首次运行若被 SmartScreen 拦截，点「更多信息 → 仍要运行」。
 
@@ -43,7 +49,7 @@
 不需要安装任何工具，Windows 自带的 C# 编译器就够了。把仓库下载到本地，双击 `build.bat`，或在 cmd 里运行：
 
 ```bat
-%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /target:winexe /optimize+ /codepage:65001 /win32icon:app.ico /resource:logo.png,logo.png /resource:VERSION,version.txt /out:FixedClipboard.exe /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll FixedClipboard.cs
+%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /target:winexe /optimize+ /codepage:65001 /win32icon:app.ico /resource:logo.png,logo.png /resource:VERSION,version.txt /out:StarportHaiku.exe /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll StarportHaiku.cs
 ```
 
 每次推送到 `main`，GitHub Actions 都会在 Windows 上编译一次；修改 `VERSION` 文件里的版本号并推送，会自动发布对应的 Release（如 `v1.0.1`）。

@@ -10,7 +10,7 @@ using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 
-// Starport 固定剪贴板：点卡片复制中文，点 EN 复制英文；窗口置顶，点击卡片不抢目标软件焦点
+// Starport Haiku（固定剪贴板）：点卡片复制中文，点 EN 复制英文；窗口置顶，点击卡片不抢目标软件焦点
 
 static class Theme
 {
@@ -825,7 +825,7 @@ class MainForm : Form
         string path = AppDomain.CurrentDomain.BaseDirectory.ToLowerInvariant();
         uint h = 2166136261;  // FNV-1a，跨进程稳定
         foreach (char ch in path) { h ^= ch; h *= 16777619; }
-        return "StarportFixedClipboard_" + h.ToString("X8");
+        return "StarportFixedClipboard_" + h.ToString("X8");  // 沿用旧名，新旧版本放同一文件夹也不会同时运行
     }
 
     [STAThread]
@@ -855,7 +855,7 @@ class MainForm : Form
     public MainForm()
     {
         string ver = ReadVersion();
-        Text = "Starport 固定剪贴板" + (ver.Length > 0 ? " v" + ver : "");
+        Text = "Starport Haiku" + (ver.Length > 0 ? " v" + ver : "");
         Font = Theme.Small;
         BackColor = Theme.Bg;
         TopMost = true;
