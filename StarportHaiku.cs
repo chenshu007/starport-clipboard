@@ -135,12 +135,13 @@ class Card : Control
     Rectangle DelRect { get { return new Rectangle(Width - 38, (BoxH - 28) / 2, 28, 28); } }
     Rectangle EditRect { get { return new Rectangle(Width - 68, (BoxH - 28) / 2, 28, 28); } }
     Rectangle PinRect { get { return new Rectangle(Width - 98, (BoxH - 28) / 2, 28, 28); } }
+    Rectangle CountRect { get { return new Rectangle(PinRect.Left - 50, 0, 48, BoxH); } }  // 管理模式：点击次数
 
     Rectangle TextArea
     {
         get
         {
-            int right = Manage ? PinRect.Left - 6 : (P.En.Length > 0 ? EnRect.Left - 8 : Width - 12);
+            int right = Manage ? CountRect.Left - 4 : (P.En.Length > 0 ? EnRect.Left - 8 : Width - 12);
             return new Rectangle(38, 0, Math.Max(10, right - 38), BoxH);
         }
     }
@@ -231,6 +232,7 @@ class Card : Control
 
         if (Manage)
         {
+            Theme.Text(g, P.Count + " 次", Theme.Small, CountRect, Theme.Muted, TextFormatFlags.Right);
             Theme.Text(g, "\U0001F4CC", Theme.Sym, PinRect,
                 P.Pinned || zone == Zone.Pin ? Theme.Clay : Theme.Line, TextFormatFlags.HorizontalCenter);
             Theme.Text(g, "✎", Theme.Sym, EditRect, zone == Zone.Edit || zone == Zone.Body ? Theme.Clay : Theme.Muted, TextFormatFlags.HorizontalCenter);
@@ -564,17 +566,25 @@ class SettingsDialog : Form
         exp.FlatStyle = FlatStyle.Flat;
         exp.FlatAppearance.BorderColor = Theme.Line;
         exp.BackColor = Color.White;
-        exp.SetBounds(20, 240, 146, 30);
+        exp.SetBounds(20, 240, 96, 30);
         exp.Click += delegate { main.ExportPhrases(this); };
         Button imp = new Button();
         imp.Text = "导入词条…";
         imp.FlatStyle = FlatStyle.Flat;
         imp.FlatAppearance.BorderColor = Theme.Line;
         imp.BackColor = Color.White;
-        imp.SetBounds(174, 240, 146, 30);
+        imp.SetBounds(122, 240, 96, 30);
         imp.Click += delegate { main.ImportPhrases(this); };
 
-        Controls.AddRange(new Control[] { chk, l, tSuffix, preview, numCutoff, lc, lcEnd, lc2, exp, imp, about, ok, cancel });
+        Button usage = new Button();
+        usage.Text = "用量统计…";
+        usage.FlatStyle = FlatStyle.Flat;
+        usage.FlatAppearance.BorderColor = Theme.Line;
+        usage.BackColor = Color.White;
+        usage.SetBounds(224, 240, 96, 30);
+        usage.Click += delegate { main.ShowUsage(this); };
+
+        Controls.AddRange(new Control[] { chk, l, tSuffix, preview, numCutoff, lc, lcEnd, lc2, exp, imp, usage, about, ok, cancel });
         AcceptButton = ok;
         CancelButton = cancel;
     }
@@ -743,6 +753,149 @@ class ImageViewer : Form
     }
 }
 
+// 用量统计（戏仿 Claude 的 Usage 页面）：今天 / 近 7 天 / 累计、节省的打字时间、近 7 天柱状图、最常用 3 条
+class UsageDialog : Form
+{
+    public const int CharsPerMinute = 40;  // 估算打字速度：每分钟 40 字
+
+    readonly int today, week, total;
+    readonly long savedChars;
+    readonly DateTime since;
+    readonly DateTime[] dayDates;
+    readonly int[] dayCounts;
+    readonly List<KeyValuePair<string, int>> top;
+    readonly MainForm main;
+
+    public UsageDialog(MainForm main, int today, int week, int total, long savedChars, DateTime since,
+                       DateTime[] dayDates, int[] dayCounts, List<KeyValuePair<string, int>> top)
+    {
+        this.main = main;
+        this.today = today; this.week = week; this.total = total;
+        this.savedChars = savedChars; this.since = since;
+        this.dayDates = dayDates; this.dayCounts = dayCounts; this.top = top;
+
+        Text = "用量 Usage";
+        Font = Theme.Small;
+        BackColor = Theme.Bg;
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        StartPosition = FormStartPosition.CenterParent;
+        MinimizeBox = MaximizeBox = false;
+        ShowInTaskbar = false;
+        TopMost = true;
+        DoubleBuffered = true;
+        AutoScaleMode = AutoScaleMode.None;
+        ClientSize = new Size(360, 470);
+
+        Button reset = new Button();
+        reset.Text = "重置";
+        reset.FlatStyle = FlatStyle.Flat;
+        reset.FlatAppearance.BorderColor = Theme.Line;
+        reset.BackColor = Color.White;
+        reset.SetBounds(160, 424, 88, 30);
+        reset.Click += delegate
+        {
+            if (MessageBox.Show(this, "清空全部统计，并把每条词条的点击次数归零？\n（启动时的排序也会重新开始）", "重置统计",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+            this.main.ResetStats();
+            Close();
+        };
+        Button close = new Button();
+        close.Text = "关闭";
+        close.FlatStyle = FlatStyle.Flat;
+        close.FlatAppearance.BorderColor = Theme.Line;
+        close.BackColor = Theme.Clay;
+        close.ForeColor = Color.White;
+        close.SetBounds(256, 424, 88, 30);
+        close.DialogResult = DialogResult.Cancel;
+        Controls.Add(reset);
+        Controls.Add(close);
+        CancelButton = close;
+    }
+
+    public static string FormatSaved(long chars)
+    {
+        long minutes = chars / CharsPerMinute;
+        if (minutes < 1) return "不到 1 分钟";
+        if (minutes < 60) return minutes + " 分钟";
+        return (minutes / 60) + " 小时 " + (minutes % 60) + " 分钟";
+    }
+
+    void Tile(Graphics g, int x, string label, int value)
+    {
+        Rectangle r = new Rectangle(x, 54, 100, 66);
+        using (GraphicsPath p = Theme.Round(new RectangleF(r.X + 0.5f, r.Y + 0.5f, r.Width - 1, r.Height - 1), 10))
+        using (SolidBrush b = new SolidBrush(Theme.Card))
+        using (Pen pen = new Pen(Theme.Line))
+        {
+            g.FillPath(b, p);
+            g.DrawPath(pen, p);
+        }
+        Theme.Text(g, label, Theme.Small, new Rectangle(r.X + 12, r.Y + 6, r.Width - 16, 20), Theme.Muted, TextFormatFlags.Left);
+        using (Font f = new Font("Georgia", 17f))
+            Theme.Text(g, value.ToString("N0"), f, new Rectangle(r.X + 10, r.Y + 26, r.Width - 14, 32), Theme.Ink, TextFormatFlags.Left);
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        Graphics g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.Clear(Theme.Bg);
+
+        Theme.Text(g, "用量", Theme.Title, new Rectangle(16, 12, 200, 30), Theme.Ink, TextFormatFlags.Left);
+        Theme.Text(g, "Usage", Theme.En, new Rectangle(76, 16, 120, 24), Theme.Muted, TextFormatFlags.Left);
+
+        Tile(g, 16, "今天", today);
+        Tile(g, 130, "近 7 天", week);
+        Tile(g, 244, "累计", total);
+
+        // 节省的打字时间
+        Theme.Text(g, "为你节省了约 " + FormatSaved(savedChars) + "打字", Theme.Zh,
+            new Rectangle(16, 132, 330, 26), Theme.Clay, TextFormatFlags.Left);
+        Theme.Text(g, "共复制 " + savedChars.ToString("N0") + " 字 · 按每分钟 " + CharsPerMinute + " 字估算", Theme.Small,
+            new Rectangle(16, 158, 330, 20), Theme.Muted, TextFormatFlags.Left);
+
+        // 近 7 天柱状图
+        Theme.Text(g, "近 7 天", Theme.Small, new Rectangle(16, 188, 200, 20), Theme.Ink, TextFormatFlags.Left);
+        int max = 1;
+        foreach (int c in dayCounts) max = Math.Max(max, c);
+        string[] wk = { "日", "一", "二", "三", "四", "五", "六" };
+        int barW = 30, gap = (328 - barW * 7) / 6, baseY = 290, maxH = 70;
+        for (int i = 0; i < 7; i++)
+        {
+            int x = 16 + i * (barW + gap);
+            int h = dayCounts[i] == 0 ? 2 : Math.Max(4, dayCounts[i] * maxH / max);
+            bool isToday = i == 6;
+            using (GraphicsPath p = Theme.Round(new RectangleF(x, baseY - h, barW, h), Math.Min(4, h / 2f)))
+            using (SolidBrush b = new SolidBrush(isToday ? Theme.Clay : Color.FromArgb(232, 196, 180)))
+                g.FillPath(b, p);
+            if (dayCounts[i] > 0)
+                Theme.Text(g, dayCounts[i].ToString(), Theme.Small, new Rectangle(x - 10, baseY - h - 18, barW + 20, 16),
+                    Theme.Muted, TextFormatFlags.HorizontalCenter);
+            Theme.Text(g, isToday ? "今天" : wk[(int)dayDates[i].DayOfWeek], Theme.Small,
+                new Rectangle(x - 10, baseY + 4, barW + 20, 18), isToday ? Theme.Clay : Theme.Muted, TextFormatFlags.HorizontalCenter);
+        }
+
+        // 最常用 3 条
+        Theme.Text(g, "最常用", Theme.Small, new Rectangle(16, 322, 200, 20), Theme.Ink, TextFormatFlags.Left);
+        int topMax = top.Count > 0 ? Math.Max(1, top[0].Value) : 1;
+        for (int i = 0; i < top.Count; i++)
+        {
+            int y = 346 + i * 24;
+            Theme.Text(g, (i + 1) + ".  " + top[i].Key, Theme.Small, new Rectangle(16, y, 190, 20), Theme.Ink, TextFormatFlags.Left);
+            int bw = Math.Max(3, top[i].Value * 80 / topMax);
+            using (GraphicsPath p = Theme.Round(new RectangleF(212, y + 6, bw, 8), 4))
+            using (SolidBrush b = new SolidBrush(Theme.Clay))
+                g.FillPath(b, p);
+            Theme.Text(g, top[i].Value.ToString("N0") + " 次", Theme.Small, new Rectangle(296, y, 50, 20), Theme.Muted, TextFormatFlags.Right);
+        }
+        if (top.Count == 0)
+            Theme.Text(g, "还没有复制记录", Theme.Small, new Rectangle(16, 346, 300, 20), Theme.Muted, TextFormatFlags.Left);
+
+        Theme.Text(g, "统计始于 " + since.Year + "年" + since.Month + "月" + since.Day + "日", Theme.Small,
+            new Rectangle(16, 428, 150, 22), Theme.Muted, TextFormatFlags.Left);
+    }
+}
+
 class MainForm : Form
 {
     const int WM_MOUSEACTIVATE = 0x21;
@@ -774,6 +927,12 @@ class MainForm : Form
     };
     int defaultsVersion = 1;
     int lastQty = 2;
+
+    // 用量统计：#stats_since=、#stats_total=、#stats_chars=、#stats_days=日期:次数,…（只保留近 7 天）
+    DateTime statsSince = DateTime.MinValue;
+    int statsTotal;
+    long statsChars;
+    readonly Dictionary<string, int> statsDays = new Dictionary<string, int>();
     Point winPos;          // 上次关闭/拖动后的窗口位置
     bool hasWinPos;
     Phrase undoPhrase;     // 刚删除、还能撤销的词条
@@ -1373,6 +1532,25 @@ class MainForm : Form
             if (line.StartsWith("#last_qty=")) { int.TryParse(line.Substring(10).Trim(), out lastQty); continue; }
             if (line.StartsWith("#day_cutoff=")) { int.TryParse(line.Substring(12).Trim(), out DateTokens.CutoffHour); continue; }
             if (line.StartsWith("#defaults=")) { int.TryParse(line.Substring(10).Trim(), out defaultsVersion); continue; }
+            if (line.StartsWith("#stats_since="))
+            {
+                DateTime d;
+                if (DateTime.TryParseExact(line.Substring(13).Trim(), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out d))
+                    statsSince = d;
+                continue;
+            }
+            if (line.StartsWith("#stats_total=")) { int.TryParse(line.Substring(13).Trim(), out statsTotal); continue; }
+            if (line.StartsWith("#stats_chars=")) { long.TryParse(line.Substring(13).Trim(), out statsChars); continue; }
+            if (line.StartsWith("#stats_days="))
+            {
+                foreach (string kv in line.Substring(12).Split(','))
+                {
+                    string[] a = kv.Split(':');
+                    int dayCount;
+                    if (a.Length == 2 && a[0].Trim().Length == 10 && int.TryParse(a[1], out dayCount)) statsDays[a[0].Trim()] = dayCount;
+                }
+                continue;
+            }
             if (line.StartsWith("#win_pos="))
             {
                 string[] xy = line.Substring(9).Split(',');
@@ -1445,8 +1623,81 @@ class MainForm : Form
         }
         catch { Flash("读取 phrases.txt 失败", true); }
 
+        // 首次启用统计：用已有的点击次数估算累计次数和字数
+        if (statsSince == DateTime.MinValue)
+        {
+            statsSince = DateTokens.BusinessDate;
+            statsTotal = 0;
+            statsChars = 0;
+            foreach (Phrase p in phrases)
+            {
+                statsTotal += p.Count;
+                statsChars += (long)p.Count * DateTokens.FillQty(DateTokens.Expand(p.Zh, false), "2").Length;
+            }
+            Save();
+        }
+
         SortPhrases(true);
         BackupDaily();
+    }
+
+    static string DayKey(DateTime d) { return d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture); }
+
+    // 记一次复制：今天 +1、累计 +1、字数累加；只保留近 7 天的每日数据
+    void RecordCopy(int chars)
+    {
+        DateTime today = DateTokens.BusinessDate;
+        string key = DayKey(today);
+        int n;
+        statsDays.TryGetValue(key, out n);
+        statsDays[key] = n + 1;
+        statsTotal++;
+        statsChars += chars;
+        List<string> old = new List<string>();
+        foreach (string k in statsDays.Keys)
+        {
+            DateTime d;
+            if (!DateTime.TryParseExact(k, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out d) ||
+                d < today.AddDays(-6) || d > today)
+                old.Add(k);
+        }
+        foreach (string k in old) statsDays.Remove(k);
+    }
+
+    public void ShowUsage(IWin32Window owner)
+    {
+        DateTime today = DateTokens.BusinessDate;
+        DateTime[] dates = new DateTime[7];
+        int[] counts = new int[7];
+        int week = 0;
+        for (int i = 0; i < 7; i++)
+        {
+            dates[i] = today.AddDays(i - 6);
+            int n;
+            statsDays.TryGetValue(DayKey(dates[i]), out n);
+            counts[i] = n;
+            week += n;
+        }
+        List<Phrase> sorted = new List<Phrase>(phrases);
+        sorted.Sort(delegate(Phrase a, Phrase b) { return b.Count.CompareTo(a.Count); });
+        List<KeyValuePair<string, int>> top = new List<KeyValuePair<string, int>>();
+        for (int i = 0; i < sorted.Count && top.Count < 3; i++)
+            if (sorted[i].Count > 0)
+                top.Add(new KeyValuePair<string, int>(DateTokens.FillQty(DateTokens.Expand(sorted[i].Zh, false), "?"), sorted[i].Count));
+        using (UsageDialog d = new UsageDialog(this, counts[6], week, statsTotal, statsChars, statsSince, dates, counts, top))
+            d.ShowDialog(owner);
+    }
+
+    public void ResetStats()
+    {
+        statsSince = DateTokens.BusinessDate;
+        statsTotal = 0;
+        statsChars = 0;
+        statsDays.Clear();
+        foreach (Phrase p in phrases) p.Count = 0;
+        Save();
+        Rebuild();
+        Flash("统计已重置", false);
     }
 
     // 钉住的排最前（保持原顺序）；其余按点击次数从高到低（稳定排序）。byCount=false 时只把钉住的提到前面
@@ -1508,6 +1759,15 @@ class MainForm : Form
             lines.Add("#last_qty=" + lastQty);
             lines.Add("#defaults=" + defaultsVersion);
             if (hasWinPos) lines.Add("#win_pos=" + winPos.X + "," + winPos.Y);
+            if (statsSince != DateTime.MinValue)
+            {
+                lines.Add("#stats_since=" + statsSince.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+                lines.Add("#stats_total=" + statsTotal);
+                lines.Add("#stats_chars=" + statsChars);
+                List<string> kv = new List<string>();
+                foreach (KeyValuePair<string, int> d in statsDays) kv.Add(d.Key + ":" + d.Value);
+                lines.Add("#stats_days=" + string.Join(",", kv.ToArray()));
+            }
             foreach (Phrase p in phrases)
                 lines.Add(p.Zh + "|" + p.En + "|" + p.Count + (p.Pinned ? "|1" : ""));
             byte[] data = new UTF8Encoding(false).GetBytes(string.Join("\r\n", lines.ToArray()) + "\r\n");
@@ -1629,8 +1889,10 @@ class MainForm : Form
         {
             try
             {
-                Clipboard.SetText(WithSuffix(s, userMode, userSuffix));
+                string text = WithSuffix(s, userMode, userSuffix);
+                Clipboard.SetText(text);
                 p.Count++;
+                RecordCopy(text.Length);
                 Save();
                 Flash("✓ 已复制  " + s, false);
                 return;
