@@ -320,6 +320,84 @@ class EditDialog : Form
     }
 }
 
+// 设置弹窗：用户模式开关 + 后缀
+class SettingsDialog : Form
+{
+    readonly CheckBox chk = new CheckBox();
+    readonly TextBox tSuffix = new TextBox();
+    readonly Label preview = new Label();
+
+    public bool UserMode { get { return chk.Checked; } }
+    public string Suffix { get { return tSuffix.Text.Replace("\r", "").Replace("\n", "").Trim(); } }
+
+    public SettingsDialog(bool userMode, string suffix)
+    {
+        Text = "设置";
+        Font = Theme.Small;
+        BackColor = Theme.Bg;
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        StartPosition = FormStartPosition.CenterParent;
+        MinimizeBox = MaximizeBox = false;
+        ShowInTaskbar = false;
+        TopMost = true;
+        AutoScaleMode = AutoScaleMode.None;
+        ClientSize = new Size(340, 230);
+
+        chk.Text = "用户模式：复制时自动在末尾加上后缀";
+        chk.SetBounds(20, 16, 300, 24);
+        chk.Checked = userMode;
+
+        Label l = new Label();
+        l.Text = "后缀（例如：-Mike）";
+        l.ForeColor = Theme.Muted;
+        l.SetBounds(20, 50, 300, 20);
+        tSuffix.SetBounds(20, 72, 300, 26);
+        tSuffix.Font = Theme.Zh;
+        tSuffix.Text = suffix;
+
+        preview.SetBounds(20, 108, 300, 40);
+        preview.ForeColor = Theme.Clay;
+
+        Button ok = new Button();
+        ok.Text = "保存";
+        ok.FlatStyle = FlatStyle.Flat;
+        ok.FlatAppearance.BorderColor = Theme.Line;
+        ok.BackColor = Theme.Clay;
+        ok.ForeColor = Color.White;
+        ok.SetBounds(214, 180, 106, 32);
+        ok.DialogResult = DialogResult.OK;
+        Button cancel = new Button();
+        cancel.Text = "取消";
+        cancel.FlatStyle = FlatStyle.Flat;
+        cancel.FlatAppearance.BorderColor = Theme.Line;
+        cancel.BackColor = Color.White;
+        cancel.SetBounds(100, 180, 106, 32);
+        cancel.DialogResult = DialogResult.Cancel;
+
+        chk.CheckedChanged += delegate { UpdatePreview(); };
+        tSuffix.TextChanged += delegate { UpdatePreview(); };
+        UpdatePreview();
+
+        Controls.AddRange(new Control[] { chk, l, tSuffix, preview, ok, cancel });
+        AcceptButton = ok;
+        CancelButton = cancel;
+    }
+
+    void UpdatePreview()
+    {
+        tSuffix.Enabled = chk.Checked;
+        preview.Text = "复制效果：" + MainForm.WithSuffix("港币1000押金", chk.Checked, Suffix) +
+                       "\n界面上不显示后缀";
+    }
+
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        Activate();
+        tSuffix.Focus();
+    }
+}
+
 class MainForm : Form
 {
     const int WM_MOUSEACTIVATE = 0x21;
@@ -347,6 +425,9 @@ class MainForm : Form
     readonly Label status = new Label();
     readonly PillButton btnAdd = new PillButton("＋ 新增");
     readonly PillButton btnManage = new PillButton("管理");
+    readonly PillButton btnSettings = new PillButton("\u2699");
+    bool userMode;       // 用户模式：复制时自动加后缀，界面不显示
+    string userSuffix = "";
     bool manage;  // 管理模式：卡片只编辑/删除，不复制
     const string ManageHint = "管理中 · 点卡片编辑";
     readonly System.Windows.Forms.Timer tip = new System.Windows.Forms.Timer();
@@ -392,6 +473,12 @@ class MainForm : Form
         header.Dock = DockStyle.Top;
         header.Height = HeaderH;
         header.Paint += PaintHeader;
+        btnSettings.Outline = true;
+        btnSettings.Font = Theme.Sym;
+        btnSettings.SetBounds(FormW - 46, 12, 32, 32);
+        btnSettings.Click += delegate { OpenSettings(); };
+        toolTip.SetToolTip(btnSettings, "设置");
+        header.Controls.Add(btnSettings);
 
         list.Dock = DockStyle.Fill;
         list.AutoScroll = true;
@@ -463,6 +550,9 @@ class MainForm : Form
             string[] lines = File.Exists(file) ? File.ReadAllLines(file, Encoding.UTF8) : Defaults;
             foreach (string line in lines)
             {
+                // 设置行：#user_mode=1、#user_suffix=后缀
+                if (line.StartsWith("#user_mode=")) { userMode = line.Substring(11).Trim() == "1"; continue; }
+                if (line.StartsWith("#user_suffix=")) { userSuffix = line.Substring(13).Trim(); continue; }
                 string[] parts = line.Split('|');
                 string zh = parts[0].Trim();
                 if (zh.Length == 0) continue;
@@ -497,11 +587,13 @@ class MainForm : Form
     {
         try
         {
-            string[] lines = new string[phrases.Count];
-            for (int i = 0; i < phrases.Count; i++)
-                lines[i] = phrases[i].Zh + "|" + phrases[i].En + "|" + phrases[i].Count;
+            List<string> lines = new List<string>();
+            lines.Add("#user_mode=" + (userMode ? "1" : "0"));
+            lines.Add("#user_suffix=" + userSuffix);
+            foreach (Phrase p in phrases)
+                lines.Add(p.Zh + "|" + p.En + "|" + p.Count);
             // 隐藏文件不能用 File.WriteAllLines 覆盖（会拒绝访问），改为打开后截断再写
-            byte[] data = new UTF8Encoding(false).GetBytes(string.Join("\r\n", lines) + "\r\n");
+            byte[] data = new UTF8Encoding(false).GetBytes(string.Join("\r\n", lines.ToArray()) + "\r\n");
             using (FileStream fs = new FileStream(file, FileMode.OpenOrCreate, FileAccess.Write))
             {
                 fs.SetLength(0);
@@ -556,7 +648,7 @@ class MainForm : Form
         {
             try
             {
-                Clipboard.SetText(s);
+                Clipboard.SetText(WithSuffix(s, userMode, userSuffix));
                 p.Count++;
                 Save();
                 Flash("✓ 已复制  " + s, false);
@@ -620,6 +712,24 @@ class MainForm : Form
         if (e.KeyCode >= Keys.D1 && e.KeyCode <= Keys.D9) n = e.KeyCode - Keys.D1;
         else if (e.KeyCode >= Keys.NumPad1 && e.KeyCode <= Keys.NumPad9) n = e.KeyCode - Keys.NumPad1;
         if (!manage && n >= 0 && n < phrases.Count) { CopyText(phrases[n], phrases[n].Zh); e.Handled = true; }
+    }
+
+    // 用户模式下在末尾加后缀（用空格隔开）；状态栏和卡片仍只显示原文
+    public static string WithSuffix(string text, bool on, string suffix)
+    {
+        return on && suffix.Length > 0 ? text + " " + suffix : text;
+    }
+
+    void OpenSettings()
+    {
+        using (SettingsDialog d = new SettingsDialog(userMode, userSuffix))
+        {
+            if (d.ShowDialog(this) != DialogResult.OK) return;
+            userMode = d.UserMode;
+            userSuffix = d.Suffix;
+            Save();
+            Flash("设置已保存", false);
+        }
     }
 
     void SetManage(bool on)
