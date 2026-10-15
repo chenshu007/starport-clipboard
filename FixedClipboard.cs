@@ -958,7 +958,7 @@ class MainForm : Form
         btnContext.Text = contextExpanded ? "收起上下文" : "扩展上下文窗口";
         btnContext.Invalidate();
         if (contextExpanded) RebuildImages();
-        UpdateWindowSize();
+        Rebuild();
     }
 
     static Image NormalizeImage(Image src)
@@ -1174,6 +1174,19 @@ class MainForm : Form
         Flash("已清空图片", false);
     }
 
+    // 设置行格式：# + 小写英文/下划线 + =，例如 #topmost=1
+    static bool IsSettingLine(string line)
+    {
+        int eq = line.IndexOf('=');
+        if (!line.StartsWith("#") || eq < 2) return false;
+        for (int i = 1; i < eq; i++)
+        {
+            char ch = line[i];
+            if (!((ch >= 'a' && ch <= 'z') || ch == '_')) return false;
+        }
+        return true;
+    }
+
     // phrases.txt 每行：中文|English|点击次数（后两项可省略）
     void LoadPhrases()
     {
@@ -1189,7 +1202,7 @@ class MainForm : Form
                 if (line.StartsWith("#last_qty=")) { int.TryParse(line.Substring(10).Trim(), out lastQty); continue; }
                 if (line.StartsWith("#day_cutoff=")) { int.TryParse(line.Substring(12).Trim(), out DateTokens.CutoffHour); continue; }
                 if (line.StartsWith("#defaults=")) { int.TryParse(line.Substring(10).Trim(), out defaultsVersion); continue; }
-                if (line.StartsWith("#")) continue;
+                if (IsSettingLine(line)) continue;  // 未知设置行（如新版本写入的）跳过；「#1203 ...」这类词条照常读取
                 string[] parts = line.Split('|');
                 string zh = parts[0].Trim();
                 if (zh.Length == 0) continue;
@@ -1284,7 +1297,10 @@ class MainForm : Form
         totalCardH += 4;
         visibleH += 4;
 
-        int maxList = (int)(Screen.PrimaryScreen.WorkingArea.Height * 0.75) - HeaderH - ContextBarH - FooterH;
+        // 整个窗口最多占屏幕工作区 85%；展开图片区时列表让出高度，改为滚动
+        Rectangle wa = Screen.FromControl(this).WorkingArea;
+        int maxClient = (int)(wa.Height * 0.85) - SystemInformation.CaptionHeight;
+        int maxList = maxClient - HeaderH - ContextBarH - FooterH - (contextExpanded ? ImageAreaH : 0);
         return Math.Max(64, Math.Min(visibleH, maxList));
     }
 
@@ -1294,6 +1310,10 @@ class MainForm : Form
         int listH = CalcListHeight(out total);
         int extraH = contextExpanded ? ImageAreaH : 0;
         ClientSize = new Size(FormW, HeaderH + listH + ContextBarH + extraH + FooterH);
+
+        // 窗口底部超出屏幕时往上挪
+        Rectangle wa = Screen.FromControl(this).WorkingArea;
+        if (Bottom > wa.Bottom) Top = Math.Max(wa.Top, wa.Bottom - Height);
     }
 
     void Rebuild()
