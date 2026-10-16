@@ -42,11 +42,6 @@ class MainForm : Form
         "加购{数量}份自助早餐 {明天}|{qty} EBF {tomorrow}",
     };
 
-    // 用量统计：#stats_since=、#stats_total=、#stats_chars=、#stats_days=日期:次数,…（只保留近 7 天）
-    DateTime statsSince = DateTime.MinValue;
-    int statsTotal;
-    long statsChars;
-    readonly Dictionary<string, int> statsDays = new Dictionary<string, int>();
     Phrase undoPhrase;     // 刚删除、还能撤销的词条
     int undoIndex;
 
@@ -58,6 +53,7 @@ class MainForm : Form
     internal static string DataDir = AppDomain.CurrentDomain.BaseDirectory;
     readonly string file = Path.Combine(DataDir, "phrases.txt");
     readonly Settings settings = new Settings();
+    readonly UsageStats stats;
     readonly List<Phrase> phrases = new List<Phrase>();
     readonly List<Image> images = new List<Image>();
     readonly Panel header = new Panel();
@@ -127,7 +123,7 @@ class MainForm : Form
 
     public MainForm()
     {
-        RegisterStatsSettings();
+        stats = new UsageStats(settings);
         string ver = ReadVersion();
         Text = "Starport Haiku" + (ver.Length > 0 ? " v" + ver : "");
         Font = Theme.Small;
@@ -691,80 +687,14 @@ class MainForm : Form
         catch { Flash("读取 phrases.txt 失败", true); }
 
         // 首次启用统计：用已有的点击次数估算累计次数和字数
-        if (statsSince == DateTime.MinValue)
+        if (!stats.Started)
         {
-            statsSince = DateTokens.BusinessDate;
-            statsTotal = 0;
-            statsChars = 0;
-            foreach (Phrase p in phrases)
-            {
-                statsTotal += p.Count;
-                statsChars += (long)p.Count * DateTokens.FillQty(DateTokens.Expand(p.Zh, false), "2").Length;
-            }
+            stats.StartFrom(phrases);
             Save();
         }
 
         SortPhrases(true);
         BackupDaily();
-    }
-
-    // 统计的四个设置行：只有开始统计后（stats_since 有值）才写出
-    void RegisterStatsSettings()
-    {
-        settings.Register("stats_since",
-            delegate(string v)
-            {
-                DateTime d;
-                if (DateTime.TryParseExact(v.Trim(), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out d))
-                    statsSince = d;
-            },
-            delegate { return statsSince != DateTime.MinValue ? statsSince.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) : null; });
-        settings.Register("stats_total",
-            delegate(string v) { int.TryParse(v.Trim(), out statsTotal); },
-            delegate { return statsSince != DateTime.MinValue ? statsTotal.ToString() : null; });
-        settings.Register("stats_chars",
-            delegate(string v) { long.TryParse(v.Trim(), out statsChars); },
-            delegate { return statsSince != DateTime.MinValue ? statsChars.ToString() : null; });
-        settings.Register("stats_days",
-            delegate(string v)
-            {
-                foreach (string kv in v.Split(','))
-                {
-                    string[] a = kv.Split(':');
-                    int dayCount;
-                    if (a.Length == 2 && a[0].Trim().Length == 10 && int.TryParse(a[1], out dayCount)) statsDays[a[0].Trim()] = dayCount;
-                }
-            },
-            delegate
-            {
-                if (statsSince == DateTime.MinValue) return null;
-                List<string> kv = new List<string>();
-                foreach (KeyValuePair<string, int> d in statsDays) kv.Add(d.Key + ":" + d.Value);
-                return string.Join(",", kv.ToArray());
-            });
-    }
-
-    static string DayKey(DateTime d) { return d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture); }
-
-    // 记一次复制：今天 +1、累计 +1、字数累加；只保留近 7 天的每日数据
-    void RecordCopy(int chars)
-    {
-        DateTime today = DateTokens.BusinessDate;
-        string key = DayKey(today);
-        int n;
-        statsDays.TryGetValue(key, out n);
-        statsDays[key] = n + 1;
-        statsTotal++;
-        statsChars += chars;
-        List<string> old = new List<string>();
-        foreach (string k in statsDays.Keys)
-        {
-            DateTime d;
-            if (!DateTime.TryParseExact(k, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out d) ||
-                d < today.AddDays(-6) || d > today)
-                old.Add(k);
-        }
-        foreach (string k in old) statsDays.Remove(k);
     }
 
     public void ShowUsage(IWin32Window owner)
@@ -776,27 +706,18 @@ class MainForm : Form
         for (int i = 0; i < 7; i++)
         {
             dates[i] = today.AddDays(i - 6);
-            int n;
-            statsDays.TryGetValue(DayKey(dates[i]), out n);
+            int n = stats.CountOn(dates[i]);
             counts[i] = n;
             week += n;
         }
-        List<Phrase> sorted = new List<Phrase>(phrases);
-        sorted.Sort(delegate(Phrase a, Phrase b) { return b.Count.CompareTo(a.Count); });
-        List<KeyValuePair<string, int>> top = new List<KeyValuePair<string, int>>();
-        for (int i = 0; i < sorted.Count && top.Count < 3; i++)
-            if (sorted[i].Count > 0)
-                top.Add(new KeyValuePair<string, int>(DateTokens.FillQty(DateTokens.Expand(sorted[i].Zh, false), "?"), sorted[i].Count));
-        using (UsageDialog d = new UsageDialog(this, counts[6], week, statsTotal, statsChars, statsSince, dates, counts, top))
+        List<KeyValuePair<string, int>> top = UsageStats.TopPhrases(phrases, 3);
+        using (UsageDialog d = new UsageDialog(this, counts[6], week, stats.Total, stats.Chars, stats.Since, dates, counts, top))
             d.ShowDialog(owner);
     }
 
     public void ResetStats()
     {
-        statsSince = DateTokens.BusinessDate;
-        statsTotal = 0;
-        statsChars = 0;
-        statsDays.Clear();
+        stats.Reset();
         foreach (Phrase p in phrases) p.Count = 0;
         Save();
         Rebuild();
@@ -980,7 +901,7 @@ class MainForm : Form
                 string text = WithSuffix(s, settings.UserMode, settings.UserSuffix);
                 Clipboard.SetText(text);
                 p.Count++;
-                RecordCopy(text.Length);
+                stats.RecordCopy(text.Length);
                 Save();
                 Flash("✓ 已复制  " + s, false);
                 return;
