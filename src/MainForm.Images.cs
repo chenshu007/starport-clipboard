@@ -166,8 +166,7 @@ partial class MainForm
     {
         imageGrid.SuspendLayout();
         imageGrid.AutoScrollPosition = Point.Empty;
-        foreach (Control c in imageGrid.Controls) c.Dispose();
-        imageGrid.Controls.Clear();
+        DisposeChildren(imageGrid);
 
         for (int i = 0; i < stash.Count; i++)
         {
@@ -190,13 +189,8 @@ partial class MainForm
     void ViewImage(Image img)
     {
         if (img == null) return;
-        IntPtr target = NativeMethods.GetForeground();
         using (ImageViewer v = new ImageViewer(img))
-        {
-            v.ShowDialog(this);
-            if (target != IntPtr.Zero && target != Handle)
-                NativeMethods.SetForeground(target);
-        }
+            ShowKeepingFocus(delegate { return v.ShowDialog(this); });
     }
 
     void RemoveImage(Image img)
@@ -211,15 +205,14 @@ partial class MainForm
     void ClearImages()
     {
         if (stash.Count == 0) return;
-        IntPtr target = NativeMethods.GetForeground();
-        DialogResult r = MessageBox.Show(this, "清空全部 " + stash.Count + " 张参考图片？", "确认清空",
-            MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2);
-        if (target != IntPtr.Zero && target != Handle)
-            NativeMethods.SetForeground(target);
+        DialogResult r = ShowKeepingFocus(delegate
+        {
+            return MessageBox.Show(this, "清空全部 " + stash.Count + " 张参考图片？", "确认清空",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2);
+        });
         if (r != DialogResult.Yes) return;
 
-        foreach (Control c in imageGrid.Controls) c.Dispose();
-        imageGrid.Controls.Clear();
+        DisposeChildren(imageGrid);
         stash.Clear();
         RebuildImages();
         Flash("已清空图片", false);

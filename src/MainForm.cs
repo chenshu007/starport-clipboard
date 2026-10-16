@@ -190,8 +190,7 @@ partial class MainForm : Form
 
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
-        foreach (Control c in imageGrid.Controls) c.Dispose();
-        imageGrid.Controls.Clear();
+        DisposeChildren(imageGrid);
         stash.Clear();
         if (logo != null) { logo.Dispose(); logo = null; }
         base.OnFormClosed(e);
@@ -326,12 +325,18 @@ partial class MainForm : Form
         if (Bottom > wa.Bottom) Top = Math.Max(wa.Top, wa.Bottom - Height);
     }
 
+    // 释放并移除全部子控件（卡片、缩略图每次都重新创建）
+    static void DisposeChildren(Control parent)
+    {
+        foreach (Control c in parent.Controls) c.Dispose();
+        parent.Controls.Clear();
+    }
+
     void Rebuild()
     {
         list.SuspendLayout();
         list.AutoScrollPosition = Point.Empty;
-        foreach (Control c in list.Controls) c.Dispose();
-        list.Controls.Clear();
+        DisposeChildren(list);
 
         List<Card> cards = new List<Card>();
         for (int i = 0; i < store.Phrases.Count; i++)
@@ -362,20 +367,27 @@ partial class MainForm : Form
         UpdateWindowSize();
     }
 
+    // 弹窗，关闭后把焦点还给原来的软件：点卡片和按钮时本窗口不会被激活，弹窗前的前台仍是目标软件
+    // （拿不到或还不回焦点都不影响后续操作）
+    DialogResult ShowKeepingFocus(Func<DialogResult> show)
+    {
+        IntPtr target = NativeMethods.GetForeground();
+        DialogResult r = show();
+        if (target != IntPtr.Zero && target != Handle)
+            NativeMethods.SetForeground(target);
+        return r;
+    }
+
     void CopyText(Phrase p, bool en)
     {
         string s = DateTokens.Expand(en ? p.En : p.Zh, en);
         if (DateTokens.HasQty(s))
         {
-            // 点卡片时本窗口没被激活，前台仍是目标软件；弹窗关闭后把焦点还给它
-            IntPtr target = NativeMethods.GetForeground();  // 还焦点失败不影响复制
             int qty;
             using (QtyDialog d = new QtyDialog(DateTokens.FillQty(s, "?"), settings.LastQty < 1 ? 2 : settings.LastQty))
             {
-                DialogResult r = d.ShowDialog(this);
+                DialogResult r = ShowKeepingFocus(delegate { return d.ShowDialog(this); });
                 qty = d.Qty;
-                if (target != IntPtr.Zero && target != Handle)
-                    NativeMethods.SetForeground(target);
                 if (r != DialogResult.OK || qty < 1) return;
             }
             settings.LastQty = qty;

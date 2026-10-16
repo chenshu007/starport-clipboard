@@ -58,19 +58,10 @@ class SettingsDialog : Form
         lc2.ForeColor = Theme.Muted;
         lc2.SetBounds(20, 196, 320, 40);
 
-        Button ok = new Button();
-        ok.Text = "保存";
-        ok.FlatStyle = FlatStyle.Flat;
-        ok.FlatAppearance.BorderColor = Theme.Line;
-        ok.BackColor = Theme.Clay;
-        ok.ForeColor = Color.White;
+        Button ok = DialogButtons.Primary("保存");
         ok.SetBounds(214, 312, 106, 32);
         ok.DialogResult = DialogResult.OK;
-        Button cancel = new Button();
-        cancel.Text = "取消";
-        cancel.FlatStyle = FlatStyle.Flat;
-        cancel.FlatAppearance.BorderColor = Theme.Line;
-        cancel.BackColor = Color.White;
+        Button cancel = DialogButtons.Secondary("取消");
         cancel.SetBounds(100, 312, 106, 32);
         cancel.DialogResult = DialogResult.Cancel;
 
@@ -96,26 +87,14 @@ class SettingsDialog : Form
         };
 
         // 导出/导入词条：方便同事之间共用一套常用语、换电脑
-        Button exp = new Button();
-        exp.Text = "导出词条…";
-        exp.FlatStyle = FlatStyle.Flat;
-        exp.FlatAppearance.BorderColor = Theme.Line;
-        exp.BackColor = Color.White;
+        Button exp = DialogButtons.Secondary("导出词条…");
         exp.SetBounds(20, 240, 96, 30);
         exp.Click += delegate { main.ExportPhrases(this); };
-        Button imp = new Button();
-        imp.Text = "导入词条…";
-        imp.FlatStyle = FlatStyle.Flat;
-        imp.FlatAppearance.BorderColor = Theme.Line;
-        imp.BackColor = Color.White;
+        Button imp = DialogButtons.Secondary("导入词条…");
         imp.SetBounds(122, 240, 96, 30);
         imp.Click += delegate { main.ImportPhrases(this); };
 
-        Button usage = new Button();
-        usage.Text = "用量统计…";
-        usage.FlatStyle = FlatStyle.Flat;
-        usage.FlatAppearance.BorderColor = Theme.Line;
-        usage.BackColor = Color.White;
+        Button usage = DialogButtons.Secondary("用量统计…");
         usage.SetBounds(224, 240, 96, 30);
         usage.Click += delegate { main.ShowUsage(this); };
 

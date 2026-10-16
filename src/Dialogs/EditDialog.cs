@@ -42,32 +42,23 @@ class EditDialog : Form
         tEn.Font = Theme.Zh;
         tEn.Text = en;
 
-        Button ok = FlatButton("保存", Theme.Clay, Color.White);
+        Button ok = DialogButtons.Primary("保存");
+        ok.Cursor = Cursors.Hand;
         ok.SetBounds(214, 148, 106, 32);
         ok.Click += delegate
         {
             if (Zh.Length == 0) { tZh.Focus(); return; }
             DialogResult = DialogResult.OK;
         };
-        Button cancel = FlatButton("取消", Color.White, Theme.Ink);
+        Button cancel = DialogButtons.Secondary("取消");
+        cancel.ForeColor = Theme.Ink;
+        cancel.Cursor = Cursors.Hand;
         cancel.SetBounds(100, 148, 106, 32);
         cancel.DialogResult = DialogResult.Cancel;
 
         Controls.AddRange(new Control[] { l1, tZh, l2, tEn, ok, cancel });
         AcceptButton = ok;
         CancelButton = cancel;
-    }
-
-    static Button FlatButton(string text, Color back, Color fore)
-    {
-        Button b = new Button();
-        b.Text = text;
-        b.FlatStyle = FlatStyle.Flat;
-        b.FlatAppearance.BorderColor = Theme.Line;
-        b.BackColor = back;
-        b.ForeColor = fore;
-        b.Cursor = Cursors.Hand;
-        return b;
     }
 
     protected override void OnShown(EventArgs e)

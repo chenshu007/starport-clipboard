@@ -37,11 +37,7 @@ class UsageDialog : Form
         AutoScaleMode = AutoScaleMode.None;
         ClientSize = new Size(360, 470);
 
-        Button reset = new Button();
-        reset.Text = "重置";
-        reset.FlatStyle = FlatStyle.Flat;
-        reset.FlatAppearance.BorderColor = Theme.Line;
-        reset.BackColor = Color.White;
+        Button reset = DialogButtons.Secondary("重置");
         reset.SetBounds(160, 424, 88, 30);
         reset.Click += delegate
         {
@@ -50,12 +46,7 @@ class UsageDialog : Form
             this.main.ResetStats();
             Close();
         };
-        Button close = new Button();
-        close.Text = "关闭";
-        close.FlatStyle = FlatStyle.Flat;
-        close.FlatAppearance.BorderColor = Theme.Line;
-        close.BackColor = Theme.Clay;
-        close.ForeColor = Color.White;
+        Button close = DialogButtons.Primary("关闭");
         close.SetBounds(256, 424, 88, 30);
         close.DialogResult = DialogResult.Cancel;
         Controls.Add(reset);
