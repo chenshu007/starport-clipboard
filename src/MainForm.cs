@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
-using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -18,29 +17,7 @@ class MainForm : Form
     const int MA_NOACTIVATE = 3;
     const int HTCLIENT = 1;
     const int FormW = 380, HeaderH = 80, FooterH = 52, ContextBarH = 34, ImageAreaH = 216;
-    const int MaxVisibleCards = 10, MaxPhrases = 20, MaxImages = 6, MaxImageSide = 2560;
-
-    static readonly string[] Defaults =
-    {
-        "港币1000押金|HKD 1,000 deposit",
-        "VAPB，预授权1000|VAPB, pre-auth 1,000",
-        "请收取押金|Please collect the deposit",
-        "加急，客人赶时间|Urgent – guest is in a hurry",
-        "遗落物品，客人上去拿|Guest will go up to collect left items",
-        "客人遗落物品不要了|Guest does not want the left items",
-        "借用酒店的充电器在前台|Hotel charger on loan – return to front desk",
-        "无视请勿打扰（DND），进行查房|Override DND – proceed with room check",
-        "提前退房 {今天}|Early out {today}",
-        "加购{数量}份自助早餐 {明天}|{qty} EBF {tomorrow}",
-    };
-
-    // 默认词条版本：升级后给老用户补上新增的默认词条（只补一次）
-    const int DefaultsVersion = 3;
-    static readonly string[] DefaultsV2 =
-    {
-        "提前退房 {今天}|Early out {today}",
-        "加购{数量}份自助早餐 {明天}|{qty} EBF {tomorrow}",
-    };
+    const int MaxVisibleCards = 10, MaxImages = 6, MaxImageSide = 2560;
 
     Phrase undoPhrase;     // 刚删除、还能撤销的词条
     int undoIndex;
@@ -49,12 +26,9 @@ class MainForm : Form
     [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hWnd);
     DateTime shownDate;
 
-    // 词条文件所在目录：exe 所在文件夹（自检时换成临时目录）
-    internal static string DataDir = AppDomain.CurrentDomain.BaseDirectory;
-    readonly string file = Path.Combine(DataDir, "phrases.txt");
-    readonly Settings settings = new Settings();
+    readonly PhraseStore store;  // phrases.txt：词条、设置、用量统计
+    readonly Settings settings;
     readonly UsageStats stats;
-    readonly List<Phrase> phrases = new List<Phrase>();
     readonly List<Image> images = new List<Image>();
     readonly Panel header = new Panel();
     readonly Panel list = new Panel();
@@ -123,7 +97,10 @@ class MainForm : Form
 
     public MainForm()
     {
-        stats = new UsageStats(settings);
+        store = new PhraseStore(AppDomain.CurrentDomain.BaseDirectory);  // 词条文件和 exe 放在同一文件夹
+        store.Error += delegate(string msg) { Flash(msg, true); };
+        settings = store.Settings;
+        stats = store.Stats;
         string ver = ReadVersion();
         Text = "Starport Haiku" + (ver.Length > 0 ? " v" + ver : "");
         Font = Theme.Small;
@@ -270,7 +247,7 @@ class MainForm : Form
         tip.Tick += delegate { tip.Stop(); ShowIdleStatus(); };
 
         KeyDown += OnKey;
-        LoadPhrases();
+        store.Load();
         UpdatePinButton();
         ClientSize = new Size(FormW, 300);
         Rectangle wa = Screen.PrimaryScreen.WorkingArea;
@@ -297,7 +274,7 @@ class MainForm : Form
         if (settings.HasWinPos && settings.WinPos == Location) return;
         settings.WinPos = Location;
         settings.HasWinPos = true;
-        Save();
+        store.Save();
     }
 
     protected override void OnFormClosed(FormClosedEventArgs e)
@@ -392,7 +369,7 @@ class MainForm : Form
     {
         settings.TopMost = !settings.TopMost;
         UpdatePinButton();
-        Save();
+        store.Save();
         Flash(settings.TopMost ? "已置顶" : "已取消置顶", false);
     }
 
@@ -619,84 +596,6 @@ class MainForm : Form
         Flash("已清空图片", false);
     }
 
-    // phrases.txt 每行：中文|English|点击次数|钉住（后三项可省略）
-    void ParseLines(string[] lines)
-    {
-        foreach (string line in lines)
-        {
-            if (settings.TryRead(line)) continue;
-            if (Settings.IsSettingLine(line)) continue;  // 未知设置行（如新版本写入的）跳过；「#1203 ...」这类词条照常读取
-            string[] parts = line.Split('|');
-            string zh = parts[0].Trim();
-            if (zh.Length == 0) continue;
-            string en = parts.Length > 1 ? parts[1].Trim() : "";
-            int n = 0;
-            if (parts.Length > 2) int.TryParse(parts[2].Trim(), out n);
-            Phrase ph = new Phrase(zh, en, Math.Max(0, n));
-            ph.Pinned = parts.Length > 3 && parts[3].Trim() == "1";
-            phrases.Add(ph);
-        }
-    }
-
-    void LoadPhrases()
-    {
-        try
-        {
-            bool recovered = false;
-            if (File.Exists(file))
-            {
-                ParseLines(File.ReadAllLines(file, Encoding.UTF8));
-                // 文件是空的（多半是保存时断电），而备份还在：从备份恢复
-                if (new FileInfo(file).Length == 0 && File.Exists(backupFile))
-                {
-                    ParseLines(File.ReadAllLines(backupFile, Encoding.UTF8));
-                    recovered = phrases.Count > 0;
-                }
-            }
-            else ParseLines(Defaults);
-            if (recovered) { Save(); Flash("词条文件为空，已从备份恢复", true); }
-            if (!File.Exists(file)) { settings.DefaultsVersion = DefaultsVersion; Save(); }
-            else
-            {
-                if (settings.DefaultsVersion < 2)
-                {
-                    foreach (string d in DefaultsV2)
-                    {
-                        string[] parts = d.Split('|');
-                        if (!Exists(parts[0], null)) phrases.Add(new Phrase(parts[0], parts[1], 0));
-                    }
-                }
-                if (settings.DefaultsVersion < 3)
-                {
-                    // v1.4 的固定 2 份 EBF 改为复制时输入份数（保留点击次数）
-                    foreach (Phrase p in phrases)
-                        if (p.Zh == "加购2份自助早餐 {明天}" && p.En == "2 EBF {tomorrow}")
-                        {
-                            p.Zh = "加购{数量}份自助早餐 {明天}";
-                            p.En = "{qty} EBF {tomorrow}";
-                        }
-                }
-                if (settings.DefaultsVersion < DefaultsVersion)
-                {
-                    settings.DefaultsVersion = DefaultsVersion;
-                    Save();
-                }
-                HideFile();  // 旧版本留下的可见 phrases.txt 也设为隐藏
-            }
-        }
-        catch { Flash("读取 phrases.txt 失败", true); }
-
-        // 首次启用统计：用已有的点击次数估算累计次数和字数
-        if (!stats.Started)
-        {
-            stats.StartFrom(phrases);
-            Save();
-        }
-
-        SortPhrases(true);
-        BackupDaily();
-    }
-
     public void ShowUsage(IWin32Window owner)
     {
         DateTime today = DateTokens.BusinessDate;
@@ -710,7 +609,7 @@ class MainForm : Form
             counts[i] = n;
             week += n;
         }
-        List<KeyValuePair<string, int>> top = UsageStats.TopPhrases(phrases, 3);
+        List<KeyValuePair<string, int>> top = UsageStats.TopPhrases(store.Phrases, 3);
         using (UsageDialog d = new UsageDialog(this, counts[6], week, stats.Total, stats.Chars, stats.Since, dates, counts, top))
             d.ShowDialog(owner);
     }
@@ -718,106 +617,24 @@ class MainForm : Form
     public void ResetStats()
     {
         stats.Reset();
-        foreach (Phrase p in phrases) p.Count = 0;
-        Save();
+        foreach (Phrase p in store.Phrases) p.Count = 0;
+        store.Save();
         Rebuild();
         Flash("统计已重置", false);
-    }
-
-    // 钉住的排最前（保持原顺序）；其余按点击次数从高到低（稳定排序）。byCount=false 时只把钉住的提到前面
-    void SortPhrases(bool byCount)
-    {
-        List<Phrase> pinned = new List<Phrase>(), rest = new List<Phrase>();
-        foreach (Phrase p in phrases) (p.Pinned ? pinned : rest).Add(p);
-        if (byCount)
-        {
-            for (int i = 1; i < rest.Count; i++)
-            {
-                Phrase cur = rest[i];
-                int j = i - 1;
-                while (j >= 0 && rest[j].Count < cur.Count) { rest[j + 1] = rest[j]; j--; }
-                rest[j + 1] = cur;
-            }
-        }
-        phrases.Clear();
-        phrases.AddRange(pinned);
-        phrases.AddRange(rest);
-    }
-
-    string backupFile { get { return Path.Combine(DataDir, "phrases.bak"); } }
-
-    // 每天第一次启动时把 phrases.txt 备份成隐藏的 phrases.bak
-    void BackupDaily()
-    {
-        try
-        {
-            if (!File.Exists(file) || new FileInfo(file).Length == 0) return;
-            if (File.Exists(backupFile))
-            {
-                if (File.GetLastWriteTime(backupFile).Date >= DateTime.Today) return;
-                File.SetAttributes(backupFile, FileAttributes.Normal);  // 隐藏文件不能被 File.Copy 覆盖
-            }
-            File.Copy(file, backupFile, true);
-            File.SetLastWriteTime(backupFile, DateTime.Now);  // Copy 会沿用原文件时间，这里改成今天
-            File.SetAttributes(backupFile, FileAttributes.Hidden);
-        }
-        catch { }
-    }
-
-    // phrases.txt 设为隐藏，文件夹里看起来只有一个 exe
-    void HideFile()
-    {
-        try { File.SetAttributes(file, File.GetAttributes(file) | FileAttributes.Hidden); }
-        catch { }
-    }
-
-    internal void Save()
-    {
-        try
-        {
-            List<string> lines = new List<string>();
-            settings.WriteTo(lines);
-            foreach (Phrase p in phrases)
-                lines.Add(p.Zh + "|" + p.En + "|" + p.Count + (p.Pinned ? "|1" : ""));
-            byte[] data = new UTF8Encoding(false).GetBytes(string.Join("\r\n", lines.ToArray()) + "\r\n");
-
-            // 先完整写入临时文件并刷到磁盘，再替换正式文件；中途断电也不会把 phrases.txt 写成半截
-            string tmp = file + ".tmp";
-            if (File.Exists(tmp)) { File.SetAttributes(tmp, FileAttributes.Normal); File.Delete(tmp); }
-            using (FileStream fs = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write))
-            {
-                fs.Write(data, 0, data.Length);
-                fs.Flush(true);
-            }
-            if (File.Exists(file))
-            {
-                File.SetAttributes(file, FileAttributes.Normal);  // 隐藏文件不能直接被替换
-                try { File.Replace(tmp, file, null); }
-                catch
-                {
-                    // 某些磁盘（如网络共享）不支持替换，退回为覆盖复制
-                    File.Copy(tmp, file, true);
-                    File.Delete(tmp);
-                }
-            }
-            else File.Move(tmp, file);
-        }
-        catch { Flash("保存失败（目录只读？）", true); }
-        finally { if (File.Exists(file)) HideFile(); }
     }
 
     int CalcListHeight(out int totalCardH)
     {
         totalCardH = 10;
         int visibleH = 10;
-        for (int i = 0; i < phrases.Count; i++)
+        for (int i = 0; i < store.Phrases.Count; i++)
         {
-            int ch = Card.HeightFor(phrases[i]);
+            int ch = Card.HeightFor(store.Phrases[i]);
             totalCardH += ch;
             if (i < MaxVisibleCards) visibleH += ch;
         }
         totalCardH += 4;
-        visibleH += phrases.Count > MaxVisibleCards ? 18 : 4;  // 还有更多时露出下一张的一截
+        visibleH += store.Phrases.Count > MaxVisibleCards ? 18 : 4;  // 还有更多时露出下一张的一截
 
         // 整个窗口最多占屏幕工作区 85%；展开图片区时列表让出高度，改为滚动
         Rectangle wa = Screen.FromControl(this).WorkingArea;
@@ -846,9 +663,9 @@ class MainForm : Form
         list.Controls.Clear();
 
         List<Card> cards = new List<Card>();
-        for (int i = 0; i < phrases.Count; i++)
+        for (int i = 0; i < store.Phrases.Count; i++)
         {
-            Card c = new Card(phrases[i], i, manage);
+            Card c = new Card(store.Phrases[i], i, manage);
             c.CopyRequested += delegate(Card k, bool en) { CopyText(k.P, en); };
             // 编辑/删除会重建卡片，延后执行，避免在卡片自身的鼠标事件里销毁它
             c.EditRequested += delegate(Card k) { BeginInvoke((MethodInvoker)delegate { EditPhrase(k.P); }); };
@@ -902,7 +719,7 @@ class MainForm : Form
                 Clipboard.SetText(text);
                 p.Count++;
                 stats.RecordCopy(text.Length);
-                Save();
+                store.Save();
                 Flash("✓ 已复制  " + s, false);
                 return;
             }
@@ -912,16 +729,9 @@ class MainForm : Form
         Flash("复制失败", true);
     }
 
-    bool Exists(string zh, Phrase except)
-    {
-        foreach (Phrase p in phrases)
-            if (p != except && p.Zh == zh) return true;
-        return false;
-    }
-
     void AddPhrase()
     {
-        if (phrases.Count >= MaxPhrases)
+        if (store.Phrases.Count >= PhraseStore.MaxPhrases)
         {
             Flash("已达 20 条上限，请先在管理中删除不常用的", true);
             return;
@@ -929,9 +739,9 @@ class MainForm : Form
         using (EditDialog d = new EditDialog("新增词条", "", ""))
         {
             if (d.ShowDialog(this) != DialogResult.OK) return;
-            if (Exists(d.Zh, null)) { Flash("已存在相同词条", true); return; }
-            phrases.Add(new Phrase(d.Zh, d.En, 0));
-            Save();
+            if (store.Exists(d.Zh, null)) { Flash("已存在相同词条", true); return; }
+            store.Phrases.Add(new Phrase(d.Zh, d.En, 0));
+            store.Save();
             Rebuild();
             if (list.Controls.Count > 0) list.ScrollControlIntoView(list.Controls[list.Controls.Count - 1]);
             Flash("已添加", false);
@@ -943,10 +753,10 @@ class MainForm : Form
         using (EditDialog d = new EditDialog("编辑词条", p.Zh, p.En))
         {
             if (d.ShowDialog(this) != DialogResult.OK) return;
-            if (Exists(d.Zh, p)) { Flash("已存在相同词条", true); return; }
+            if (store.Exists(d.Zh, p)) { Flash("已存在相同词条", true); return; }
             p.Zh = d.Zh;
             p.En = d.En;
-            Save();
+            store.Save();
             Rebuild();
             Flash("已保存", false);
         }
@@ -955,10 +765,10 @@ class MainForm : Form
     // 直接删除，底部显示「撤销」，6 秒内可恢复
     void RemovePhrase(Phrase p)
     {
-        int idx = phrases.IndexOf(p);
+        int idx = store.Phrases.IndexOf(p);
         if (idx < 0) return;
-        phrases.RemoveAt(idx);
-        Save();
+        store.Phrases.RemoveAt(idx);
+        store.Save();
         Rebuild();
 
         string name = p.Zh.Length > 6 ? p.Zh.Substring(0, 6) + "…" : p.Zh;
@@ -982,9 +792,9 @@ class MainForm : Form
     void UndoDelete()
     {
         if (undoPhrase == null) return;
-        if (phrases.Count >= MaxPhrases) { Flash("已达 20 条上限，无法恢复", true); return; }
-        phrases.Insert(Math.Min(undoIndex, phrases.Count), undoPhrase);
-        Save();
+        if (store.Phrases.Count >= PhraseStore.MaxPhrases) { Flash("已达 20 条上限，无法恢复", true); return; }
+        store.Phrases.Insert(Math.Min(undoIndex, store.Phrases.Count), undoPhrase);
+        store.Save();
         Rebuild();
         Flash("已恢复", false);
     }
@@ -992,8 +802,8 @@ class MainForm : Form
     void TogglePin(Phrase p)
     {
         p.Pinned = !p.Pinned;
-        SortPhrases(false);
-        Save();
+        store.Sort(false);
+        store.Save();
         Rebuild();
         Flash(p.Pinned ? "已钉住，固定在最上面" : "已取消钉住", false);
     }
@@ -1009,10 +819,8 @@ class MainForm : Form
             if (d.ShowDialog(owner) != DialogResult.OK) return;
             try
             {
-                List<string> lines = new List<string>();
-                foreach (Phrase p in phrases) lines.Add(p.Zh + "|" + p.En);  // 只导出词条，不含个人点击次数
-                File.WriteAllLines(d.FileName, lines.ToArray(), new UTF8Encoding(true));
-                MessageBox.Show(owner, "已导出 " + phrases.Count + " 条词条。", "导出词条",
+                store.Export(d.FileName);
+                MessageBox.Show(owner, "已导出 " + store.Phrases.Count + " 条词条。", "导出词条",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
@@ -1030,28 +838,17 @@ class MainForm : Form
             d.Title = "导入词条";
             d.Filter = "文本文件 (*.txt)|*.txt|所有文件 (*.*)|*.*";
             if (d.ShowDialog(owner) != DialogResult.OK) return;
-            int added = 0, dup = 0, over = 0;
+            int added, dup, over;
             try
             {
-                foreach (string line in File.ReadAllLines(d.FileName, Encoding.UTF8))
-                {
-                    if (line.Trim().Length == 0 || Settings.IsSettingLine(line)) continue;
-                    string[] parts = line.Split('|');
-                    string zh = parts[0].Trim();
-                    if (zh.Length == 0) continue;
-                    string en = parts.Length > 1 ? parts[1].Trim() : "";
-                    if (Exists(zh, null)) { dup++; continue; }
-                    if (phrases.Count >= MaxPhrases) { over++; continue; }
-                    phrases.Add(new Phrase(zh, en, 0));
-                    added++;
-                }
+                added = store.Import(File.ReadAllLines(d.FileName, Encoding.UTF8), out dup, out over);
             }
             catch (Exception ex)
             {
                 MessageBox.Show(owner, "导入失败：" + ex.Message, "导入词条", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
-            if (added > 0) { Save(); Rebuild(); }
+            if (added > 0) { store.Save(); Rebuild(); }
             string msg = "已导入 " + added + " 条。";
             if (dup > 0) msg += "\n跳过重复 " + dup + " 条。";
             if (over > 0) msg += "\n超出 20 条上限，未导入 " + over + " 条。";
@@ -1066,7 +863,7 @@ class MainForm : Form
         if (e.KeyCode >= Keys.D1 && e.KeyCode <= Keys.D9) n = e.KeyCode - Keys.D1;
         else if (e.KeyCode >= Keys.NumPad1 && e.KeyCode <= Keys.NumPad9) n = e.KeyCode - Keys.NumPad1;
         else if (e.KeyCode == Keys.D0 || e.KeyCode == Keys.NumPad0) n = 9;
-        if (!manage && n >= 0 && n < phrases.Count) { CopyText(phrases[n], false); e.Handled = true; }
+        if (!manage && n >= 0 && n < store.Phrases.Count) { CopyText(store.Phrases[n], false); e.Handled = true; }
     }
 
     // 用户模式下在末尾加后缀（用空格隔开）；状态栏和卡片仍只显示原文
@@ -1084,7 +881,7 @@ class MainForm : Form
             settings.UserSuffix = d.Suffix;
             DateTokens.CutoffHour = d.CutoffHour;
             Rebuild();  // 分界时间变了，卡片上的日期可能要更新
-            Save();
+            store.Save();
             Flash("设置已保存", false);
         }
     }

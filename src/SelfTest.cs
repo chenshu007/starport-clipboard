@@ -376,7 +376,8 @@ static class SelfTest
     static void Load(string dir, bool save)
     {
         DateTokens.CutoffHour = 0;  // 与刚启动的程序一致
-        MainForm.DataDir = dir;
-        using (MainForm f = new MainForm()) if (save) f.Save();
+        PhraseStore store = new PhraseStore(dir);
+        store.Load();
+        if (save) store.Save();
     }
 }
