@@ -410,6 +410,19 @@ static class SelfTest
         Load(dir, false);
         Check("截断在词条中间：比备份小的文件不覆盖备份", SameBytes(canonical, File.ReadAllBytes(bak)), null);
 
+        // 手写的文件最后一行没有换行：照常读取，不当成损坏
+        dir = NewDir(root, "no-trailing-newline");
+        file = Path.Combine(dir, "phrases.txt");
+        bak = Path.Combine(dir, "phrases.bak");
+        byte[] handEdited = new UTF8Encoding(false).GetBytes(string.Join("\r\n", Concat(DefaultSettings, NoStats,
+            new string[] { "港币1000押金|HKD 1,000 deposit|5", "手写的最后一行|Last line" })));
+        File.WriteAllBytes(file, handEdited);
+        File.WriteAllBytes(bak, canonical);
+        File.SetLastWriteTime(bak, yesterday);
+        PhraseStore hand = Open(dir);
+        Same("最后一行没有换行：照常读入", "手写的最后一行", hand.Phrases.Count == 2 ? hand.Phrases[1].Zh : null);
+        Check("最后一行没有换行：不从备份恢复、不改写文件", SameBytes(handEdited, File.ReadAllBytes(file)), null);
+
         // M1：phrases.txt 存在但为空、也没有备份：写入完整的 10 条默认词条
         dir = NewDir(root, "empty-no-backup");
         file = Path.Combine(dir, "phrases.txt");

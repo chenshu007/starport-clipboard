@@ -68,25 +68,62 @@ class PhraseStore
         }
     }
 
+    // 与 File.ReadAllLines(path, Encoding.UTF8) 相同的分行方式（自动识别 BOM）
+    static string[] ToLines(byte[] data)
+    {
+        List<string> lines = new List<string>();
+        using (StreamReader r = new StreamReader(new MemoryStream(data), Encoding.UTF8, true))
+        {
+            string line;
+            while ((line = r.ReadLine()) != null) lines.Add(line);
+        }
+        return lines.ToArray();
+    }
+
+    static bool EndsWithNewline(byte[] data) { return data.Length > 0 && (data[data.Length - 1] == '\n' || data[data.Length - 1] == '\r'); }
+
+    // 读入全部行，返回其中完整词条的条数：程序保存的文件总以换行结尾，
+    // 没有换行结尾时最后一行可能是截断留下的半行，即使读成了词条也不算完整
+    int ParseLinesCountingWhole(string[] lines, bool endsWithNewline)
+    {
+        if (endsWithNewline || lines.Length == 0)
+        {
+            ParseLines(lines);
+            return Phrases.Count;
+        }
+        string[] head = new string[lines.Length - 1];
+        Array.Copy(lines, head, head.Length);
+        ParseLines(head);
+        int whole = Phrases.Count;
+        ParseLines(new string[] { lines[lines.Length - 1] });
+        return whole;
+    }
+
     // 程序启动时读入。需要时顺带保存：从备份恢复、首次写入默认词条、补默认词条、首次启用统计
     public void Load()
     {
         try
         {
-            bool recovered = false;
+            bool recovered = false, fillDefaults = false;
             if (File.Exists(file))
             {
-                ParseLines(File.ReadAllLines(file, Encoding.UTF8));
-                // 文件是空的（多半是保存时断电），而备份还在：从备份恢复
-                if (new FileInfo(file).Length == 0 && File.Exists(backupFile))
+                byte[] data = File.ReadAllBytes(file);
+                string[] lines = ToLines(data);
+                int whole = ParseLinesCountingWhole(lines, EndsWithNewline(data));
+                // 一条完整的词条也读不出来（空文件，或保存时断电被截断成半截），而备份还在：从备份恢复
+                if (whole == 0 && File.Exists(backupFile) && new FileInfo(backupFile).Length > 0)
                 {
-                    ParseLines(File.ReadAllLines(backupFile, Encoding.UTF8));
+                    Phrases.Clear();  // 丢掉截断留下的半行
+                    ParseLines(ToLines(File.ReadAllBytes(backupFile)));
                     recovered = Phrases.Count > 0;
                 }
+                // 空文件、又没能从备份恢复：和第一次运行一样写入完整的默认词条
+                fillDefaults = !recovered && lines.Length == 0;
             }
             else ParseLines(Defaults);
-            if (recovered) { Save(); OnError("词条文件为空，已从备份恢复"); }
-            if (!File.Exists(file)) { Settings.DefaultsVersion = DefaultsVersion; Save(); }
+            if (recovered) { Save(); OnError("词条文件为空或已损坏，已从备份恢复"); }
+            if (fillDefaults) ParseLines(Defaults);
+            if (!File.Exists(file) || fillDefaults) { Settings.DefaultsVersion = DefaultsVersion; Save(); }
             else
             {
                 if (Settings.DefaultsVersion < 2)
@@ -157,6 +194,8 @@ class PhraseStore
             if (File.Exists(backupFile))
             {
                 if (File.GetLastWriteTime(backupFile).Date >= DateTime.Today) return;
+                // 当前文件比备份小，可能是被截断的坏文件：不能用它覆盖唯一的好备份
+                if (new FileInfo(file).Length < new FileInfo(backupFile).Length) return;
                 File.SetAttributes(backupFile, FileAttributes.Normal);  // 隐藏文件不能被 File.Copy 覆盖
             }
             File.Copy(file, backupFile, true);
