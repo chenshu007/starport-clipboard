@@ -37,7 +37,9 @@ static class Program
         }
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
-        Application.Run(new MainForm());
+        PhraseStore store = new PhraseStore(AppDomain.CurrentDomain.BaseDirectory);  // 词条文件和 exe 放在同一文件夹
+        if (!store.Unlock(PasswordDialog.AskToUnlock)) return 0;  // 开了启动密码却不输：直接退出，不碰文件
+        Application.Run(new MainForm(store));
         GC.KeepAlive(mutex);
         return 0;
     }

@@ -70,9 +70,9 @@ partial class MainForm : Form
 
     int showMsg;  // 再次打开 exe 时，新进程发来的「显示窗口」消息号
 
-    public MainForm()
+    public MainForm(PhraseStore store)
     {
-        store = new PhraseStore(AppDomain.CurrentDomain.BaseDirectory);  // 词条文件和 exe 放在同一文件夹
+        this.store = store;
         store.Error += delegate(string msg) { Flash(msg, true); };
         settings = store.Settings;
         stats = store.Stats;
@@ -574,6 +574,45 @@ partial class MainForm : Form
     public static string WithSuffix(string text, bool on, string suffix)
     {
         return on && suffix.Length > 0 ? text + " " + suffix : text;
+    }
+
+    // ---------- 启动密码 ----------
+    public bool PasswordEnabled { get { return store.PasswordEnabled; } }
+
+    // 开启或修改启动密码（修改前先核对当前密码）
+    public void SetPassword(IWin32Window owner)
+    {
+        bool change = store.PasswordEnabled;
+        if (change && !ConfirmPassword(owner, "修改启动密码", "请输入当前密码：")) return;
+        using (SetPasswordDialog d = new SetPasswordDialog(change))
+        {
+            if (d.ShowDialog(owner) != DialogResult.OK) return;
+            Cursor old = Cursor.Current;
+            Cursor.Current = Cursors.WaitCursor;
+            bool ok = store.SetPassword(d.Password);
+            Cursor.Current = old;
+            if (ok)
+                MessageBox.Show(owner, change ? "启动密码已修改，旧密码已退役。" : "护栏已部署：词条和备份都已加密。\n下次打开程序时需要输入密码完成对齐。",
+                    "启动密码", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            else
+                MessageBox.Show(owner, "设置失败（目录只读？），词条文件保持原样。", "启动密码", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    // 关闭启动密码：先核对当前密码，词条和备份恢复为明文
+    public void RemovePassword(IWin32Window owner)
+    {
+        if (!ConfirmPassword(owner, "关闭启动密码", "下调安全等级需要人工批准：关闭后词条和备份恢复为明文保存。\n请输入当前密码：")) return;
+        if (store.RemovePassword())
+            MessageBox.Show(owner, "启动密码已关闭，词条回到明文保存。\n安全等级已下调，请谨慎对待共享文件夹。", "启动密码", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        else
+            MessageBox.Show(owner, "关闭失败（目录只读？），词条文件保持原样。", "启动密码", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+    }
+
+    bool ConfirmPassword(IWin32Window owner, string title, string prompt)
+    {
+        using (PasswordDialog d = new PasswordDialog(title, prompt, null, store.CheckPassword, false))
+            return d.ShowDialog(owner) == DialogResult.OK;
     }
 
     void OpenSettings()
