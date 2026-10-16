@@ -25,6 +25,7 @@ static class SelfTest
             SettingLines();
             Placeholders();
             RoundTrip(root);
+            Integrity(root);
         }
         catch (Exception ex) { Check("没有未处理的异常", false, ex.ToString()); }
         finally
@@ -152,6 +153,26 @@ static class SelfTest
         "加购{数量}份自助早餐 {明天}|{qty} EBF {tomorrow}|4",
         "只有中文||0",
     };
+
+    // 第一次运行（没有 phrases.txt）时写出的完整内容
+    static string[] NewFileLines()
+    {
+        string today = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        return Concat(DefaultSettings, new string[]
+        {
+            "#stats_since=" + today, "#stats_total=0", "#stats_chars=0", "#stats_days=",
+            "港币1000押金|HKD 1,000 deposit|0",
+            "VAPB，预授权1000|VAPB, pre-auth 1,000|0",
+            "请收取押金|Please collect the deposit|0",
+            "加急，客人赶时间|Urgent – guest is in a hurry|0",
+            "遗落物品，客人上去拿|Guest will go up to collect left items|0",
+            "客人遗落物品不要了|Guest does not want the left items|0",
+            "借用酒店的充电器在前台|Hotel charger on loan – return to front desk|0",
+            "无视请勿打扰（DND），进行查房|Override DND – proceed with room check|0",
+            "提前退房 {今天}|Early out {today}|0",
+            "加购{数量}份自助早餐 {明天}|{qty} EBF {tomorrow}|0",
+        });
+    }
 
     static readonly string[] NoStats = { "#stats_since=2026-10-01", "#stats_total=0", "#stats_chars=0", "#stats_days=" };
 
@@ -292,20 +313,7 @@ static class SelfTest
         // 5. 没有 phrases.txt：写入默认词条，统计从今天开始
         dir = NewDir(root, "new");
         Load(dir, false);
-        SameLines("首次运行写入默认词条", Concat(DefaultSettings, new string[]
-        {
-            "#stats_since=" + today, "#stats_total=0", "#stats_chars=0", "#stats_days=",
-            "港币1000押金|HKD 1,000 deposit|0",
-            "VAPB，预授权1000|VAPB, pre-auth 1,000|0",
-            "请收取押金|Please collect the deposit|0",
-            "加急，客人赶时间|Urgent – guest is in a hurry|0",
-            "遗落物品，客人上去拿|Guest will go up to collect left items|0",
-            "客人遗落物品不要了|Guest does not want the left items|0",
-            "借用酒店的充电器在前台|Hotel charger on loan – return to front desk|0",
-            "无视请勿打扰（DND），进行查房|Override DND – proceed with room check|0",
-            "提前退房 {今天}|Early out {today}|0",
-            "加购{数量}份自助早餐 {明天}|{qty} EBF {tomorrow}|0",
-        }), ReadLines(Path.Combine(dir, "phrases.txt")));
+        SameLines("首次运行写入默认词条", NewFileLines(), ReadLines(Path.Combine(dir, "phrases.txt")));
 
         // 6. 默认词条迁移：#defaults=2 把旧的固定 2 份 EBF 改为数量占位符（保留次数）；迁移后保存时还没排序
         dir = NewDir(root, "defaults-2");
@@ -366,18 +374,86 @@ static class SelfTest
         }), ReadLines(file));
     }
 
+    // ---------- 数据完整性（STA-39：审计 H1 / M1 / M2 / M3） ----------
+
+    static byte[] Head(byte[] data, int length)
+    {
+        byte[] part = new byte[length];
+        Array.Copy(data, part, length);
+        return part;
+    }
+
+    static void Integrity(string root)
+    {
+        Section("数据完整性");
+        byte[] canonical = Utf8(Canonical, "\r\n", false);
+        DateTime yesterday = DateTime.Now.AddDays(-1);
+
+        // H1：phrases.txt 被截断成半截（非空，但读不出词条），备份是昨天的好副本：应从备份恢复，备份不被覆盖
+        string dir = NewDir(root, "truncated-settings");
+        string file = Path.Combine(dir, "phrases.txt"), bak = Path.Combine(dir, "phrases.bak");
+        File.WriteAllBytes(file, Head(canonical, 50));
+        File.WriteAllBytes(bak, canonical);
+        File.SetLastWriteTime(bak, yesterday);
+        Load(dir, false);
+        Check("截断成读不出词条：从 phrases.bak 恢复", SameBytes(canonical, File.ReadAllBytes(file)), null);
+        Check("截断成读不出词条：备份保持完好", SameBytes(canonical, File.ReadAllBytes(bak)), null);
+
+        // H1：截断在词条中间（还能读出一部分词条）：不恢复，但更小的半截文件不能覆盖备份
+        dir = NewDir(root, "truncated-phrases");
+        file = Path.Combine(dir, "phrases.txt");
+        bak = Path.Combine(dir, "phrases.bak");
+        byte[] half = Head(canonical, canonical.Length - 20);
+        File.WriteAllBytes(file, half);
+        File.WriteAllBytes(bak, canonical);
+        File.SetLastWriteTime(bak, yesterday);
+        Load(dir, false);
+        Check("截断在词条中间：比备份小的文件不覆盖备份", SameBytes(canonical, File.ReadAllBytes(bak)), null);
+
+        // M1：phrases.txt 存在但为空、也没有备份：写入完整的 10 条默认词条
+        dir = NewDir(root, "empty-no-backup");
+        file = Path.Combine(dir, "phrases.txt");
+        File.WriteAllBytes(file, new byte[0]);
+        Load(dir, false);
+        SameLines("空文件且没有备份：写入完整默认词条", NewFileLines(), ReadLines(file));
+
+        // M2 / M3：字段里有竖线或换行，保存后再读入，仍是同一条词条、文字不丢
+        dir = NewDir(root, "pipe-newline");
+        file = Path.Combine(dir, "phrases.txt");
+        File.WriteAllBytes(file, canonical);
+        PhraseStore store = Open(dir);
+        store.Phrases.Add(new Phrase("竖线|中文", "line1\r\nline2|tail", 3));
+        store.Save();
+        byte[] first = File.ReadAllBytes(file);
+        store = Open(dir);
+        Same("含竖线/换行：词条数不变", (Canonical.Length - 11 + 1).ToString(), store.Phrases.Count.ToString());
+        Phrase last = store.Phrases.Find(delegate(Phrase p) { return p.Zh.StartsWith("竖线"); });
+        Same("含竖线：中文完整保留（| 存为 ｜）", "竖线｜中文", last != null ? last.Zh : null);
+        Same("含换行：英文完整保留（去掉换行，| 存为 ｜）", "line1line2｜tail", last != null ? last.En : null);
+        Same("含竖线/换行：次数保留", "3", last != null ? last.Count.ToString() : null);
+        store.Save();
+        Check("含竖线/换行：再保存一次内容不变", SameBytes(first, File.ReadAllBytes(file)), null);
+    }
+
     // ---------- 被测代码的入口（重构时只改这里） ----------
 
     static bool IsSettingLine(string line) { return Settings.IsSettingLine(line); }
 
     static string WithSuffix(string text, bool on, string suffix) { return MainForm.WithSuffix(text, on, suffix); }
 
-    // 按程序启动时的流程读入 dir 里的 phrases.txt；save = true 时随后再保存一次（相当于点了一次复制）
-    static void Load(string dir, bool save)
+    // 按程序启动时的流程读入 dir 里的 phrases.txt
+    static PhraseStore Open(string dir)
     {
         DateTokens.CutoffHour = 0;  // 与刚启动的程序一致
         PhraseStore store = new PhraseStore(dir);
         store.Load();
+        return store;
+    }
+
+    // 读入；save = true 时随后再保存一次（相当于点了一次复制）
+    static void Load(string dir, bool save)
+    {
+        PhraseStore store = Open(dir);
         if (save) store.Save();
     }
 }
