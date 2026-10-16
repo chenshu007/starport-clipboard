@@ -26,6 +26,7 @@ static class SelfTest
             Placeholders();
             RoundTrip(root);
             Integrity(root);
+            Encryption(root);
         }
         catch (Exception ex) { Check("没有未处理的异常", false, ex.ToString()); }
         finally
@@ -453,6 +454,133 @@ static class SelfTest
         int added = store.Import(new string[] { " 导入的中文 | Imported en | 5 | 1" }, out dup, out over);
         Phrase imported = store.Phrases.Find(delegate(Phrase p) { return p.Zh == "导入的中文"; });
         Check("导入：字段同样净化", added == 1 && imported != null && imported.En == "Imported en" && imported.Count == 0, null);
+    }
+
+    // ---------- 启动密码加密 ----------
+
+    static string Hex(byte[] b)
+    {
+        StringBuilder sb = new StringBuilder();
+        foreach (byte x in b) sb.Append(x.ToString("x2"));
+        return sb.ToString();
+    }
+
+    static bool Contains(byte[] data, string text)
+    {
+        byte[] needle = Encoding.UTF8.GetBytes(text);
+        for (int i = 0; i + needle.Length <= data.Length; i++)
+        {
+            int j = 0;
+            while (j < needle.Length && data[i + j] == needle[j]) j++;
+            if (j == needle.Length) return true;
+        }
+        return false;
+    }
+
+    // 解锁：按顺序给出 passwords 里的密码，用完返回 null（放弃）；tries 是实际问了几次
+    static bool Unlock(PhraseStore store, string[] passwords, out int tries)
+    {
+        int asked = 0;
+        bool ok = store.Unlock(delegate(int attempt) { asked = attempt; return attempt <= passwords.Length ? passwords[attempt - 1] : null; });
+        tries = asked;
+        return ok;
+    }
+
+    static void Encryption(string root)
+    {
+        Section("启动密码加密");
+        // PBKDF2-HMAC-SHA256 标准测试向量（RFC 7914 第 11 节同款参数）
+        byte[] pw = Encoding.ASCII.GetBytes("password"), salt = Encoding.ASCII.GetBytes("salt");
+        Same("PBKDF2-HMAC-SHA256，1 次", "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b", Hex(FileCrypto.Pbkdf2(pw, salt, 1, 32)));
+        Same("PBKDF2-HMAC-SHA256，4096 次", "c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134a", Hex(FileCrypto.Pbkdf2(pw, salt, 4096, 32)));
+        DateTime t0 = DateTime.Now;
+        FileCrypto.Pbkdf2(pw, salt, FileCrypto.DefaultIterations, 64);
+        log.WriteLine("        （实际迭代次数 " + FileCrypto.DefaultIterations + " 派生一次用时 " + (int)(DateTime.Now - t0).TotalMilliseconds + " ms）");
+
+        int saved = FileCrypto.NewIterations;
+        FileCrypto.NewIterations = 1000;  // 以下用例只验证逻辑，调小迭代次数加快速度
+        try
+        {
+            byte[] canonical = Utf8(Canonical, "\r\n", false);
+            const string Pwd = "开门 Sesame 123";
+
+            // 开启：词条文件和备份都加密，看不到明文；每行都是设置行的样子（旧版本不会当成词条）
+            string dir = NewDir(root, "encrypt");
+            string file = Path.Combine(dir, "phrases.txt"), bak = Path.Combine(dir, "phrases.bak");
+            File.WriteAllBytes(file, canonical);
+            PhraseStore store = Open(dir);  // 当天第一次启动：备份成明文的 phrases.bak
+            Check("开启密码成功", store.SetPassword(Pwd) && store.PasswordEnabled, null);
+            byte[] enc = File.ReadAllBytes(file), encBak = File.ReadAllBytes(bak);
+            Check("词条文件已加密，看不到明文", FileCrypto.IsEncrypted(enc) && !Contains(enc, "港币") && !Contains(enc, "Mike"), null);
+            Check("备份也已加密，看不到明文", FileCrypto.IsEncrypted(encBak) && !Contains(encBak, "港币"), null);
+            bool allSettings = true;
+            foreach (string line in ReadLines(file)) allSettings &= Settings.IsSettingLine(line);
+            Check("加密文件每行都是设置行的样子", allSettings, null);
+            Check("密码核对", store.CheckPassword(Pwd) && !store.CheckPassword("wrong"), null);
+
+            // 没解锁就读入：不读也不写
+            PhraseStore lockedStore = new PhraseStore(dir);
+            lockedStore.Load();
+            Check("没输入密码时不改动文件", !lockedStore.Save() && SameBytes(enc, File.ReadAllBytes(file)) && SameBytes(encBak, File.ReadAllBytes(bak)), null);
+
+            // 取消输入密码：返回 false，不改动文件
+            int tries;
+            Check("取消输入密码：程序退出、不改动文件", !Unlock(new PhraseStore(dir), new string[0], out tries) && SameBytes(enc, File.ReadAllBytes(file)), null);
+
+            // 密码错一次再输对：能打开；关闭密码后逐字节还原成明文（备份也是）
+            store = new PhraseStore(dir);
+            Check("密码错了要求重输，输对后打开", Unlock(store, new string[] { "wrong", Pwd }, out tries) && tries == 2, "尝试次数 " + tries);
+            DateTokens.CutoffHour = 0;
+            store.Load();
+            Check("解密后词条完整", store.Phrases.Count == 5 && store.Phrases[0].Zh == "提前退房 {今天}", null);
+            Check("关闭密码成功", store.RemovePassword() && !store.PasswordEnabled, null);
+            Check("关闭密码后词条文件逐字节还原为明文", SameBytes(canonical, File.ReadAllBytes(file)), null);
+            Check("关闭密码后备份逐字节还原为明文", SameBytes(canonical, File.ReadAllBytes(bak)), null);
+            Check("关闭后启动不再要密码", Unlock(new PhraseStore(dir), new string[0], out tries) && tries == 0, null);
+
+            // 修改密码：旧密码打不开，新密码可以
+            store = Open(dir);
+            store.SetPassword("old");
+            store.SetPassword("new");
+            Check("修改密码后旧密码打不开", !Unlock(new PhraseStore(dir), new string[] { "old" }, out tries), null);
+            Check("修改密码后新密码能打开", Unlock(new PhraseStore(dir), new string[] { "new" }, out tries), null);
+
+            // 加密状态下截断：用备份核对密码并恢复，备份不被覆盖
+            dir = NewDir(root, "encrypt-truncated");
+            file = Path.Combine(dir, "phrases.txt");
+            bak = Path.Combine(dir, "phrases.bak");
+            File.WriteAllBytes(file, canonical);
+            Open(dir).SetPassword(Pwd);
+            File.SetLastWriteTime(bak, DateTime.Now.AddDays(-1));
+            enc = File.ReadAllBytes(file);
+            File.SetAttributes(file, FileAttributes.Normal);
+            File.WriteAllBytes(file, Head(enc, enc.Length / 2));
+            store = new PhraseStore(dir);
+            Check("截断的加密文件：用备份核对密码", Unlock(store, new string[] { Pwd }, out tries), null);
+            DateTokens.CutoffHour = 0;
+            store.Load();
+            Check("截断的加密文件：从加密备份恢复", store.Phrases.Count == 5, "词条数 " + store.Phrases.Count);
+            store.RemovePassword();
+            Check("恢复后的内容逐字节一致", SameBytes(canonical, File.ReadAllBytes(file)), null);
+            Check("截断的加密文件：备份仍是完好的内容", SameBytes(canonical, File.ReadAllBytes(bak)), null);
+
+            // 加密状态下截断在中间、读不出词条以外的情况：更小的半截文件不覆盖加密备份
+            dir = NewDir(root, "encrypt-backup-guard");
+            file = Path.Combine(dir, "phrases.txt");
+            bak = Path.Combine(dir, "phrases.bak");
+            File.WriteAllBytes(file, canonical);
+            store = Open(dir);
+            store.SetPassword(Pwd);
+            store.Phrases.RemoveRange(1, 4);  // 文件变小（比如删掉了几条）
+            store.Save();
+            File.SetLastWriteTime(bak, DateTime.Now.AddDays(-1));
+            encBak = File.ReadAllBytes(bak);
+            store = new PhraseStore(dir);
+            Unlock(store, new string[] { Pwd }, out tries);
+            store.Load();
+            Check("加密时更小的文件同样不覆盖备份", SameBytes(encBak, File.ReadAllBytes(bak)), null);
+        }
+        finally { FileCrypto.NewIterations = saved; }
     }
 
     // ---------- 被测代码的入口（重构时只改这里） ----------

@@ -36,6 +36,8 @@ class PhraseStore
     public readonly Settings Settings = new Settings();
     public readonly UsageStats Stats;
     readonly string file, backupFile;
+    FileCrypto crypto;  // 开了启动密码时不为 null：读写都经过加密
+    bool locked;        // 文件加了密码却没解开：不读也不写，免得覆盖掉加密的内容
 
     // 读写出错时的提示文字（界面上用红字显示）
     public event Action<string> Error;
@@ -48,6 +50,50 @@ class PhraseStore
     }
 
     void OnError(string msg) { if (Error != null) Error(msg); }
+
+    public bool PasswordEnabled { get { return crypto != null; } }
+
+    static byte[] ReadIfExists(string path) { return File.Exists(path) ? File.ReadAllBytes(path) : null; }
+
+    // 开了启动密码时（词条文件或备份是加密的），程序启动先用密码解开。
+    // ask(第几次) 返回输入的密码，返回 null 表示放弃：这时返回 false，程序直接退出，不改动任何文件。
+    // 没开密码时直接返回 true。
+    public bool Unlock(Func<int, string> ask)
+    {
+        byte[] main = ReadIfExists(file), bak = ReadIfExists(backupFile);
+        bool mainEnc = FileCrypto.IsEncrypted(main), bakEnc = FileCrypto.IsEncrypted(bak);
+        if (!mainEnc && !bakEnc) return true;
+        // 两份都坏到连格式都不完整：没法核对密码，只能用输入的密码重新开始
+        bool checkable = FileCrypto.IsWellFormed(main) || FileCrypto.IsWellFormed(bak);
+        for (int attempt = 1; ; attempt++)
+        {
+            string password = ask(attempt);
+            if (password == null) return false;
+            FileCrypto c = null;
+            byte[] plain;
+            // 主文件被截断时它校验不过，用备份核对密码，读入时再从备份恢复
+            if ((mainEnc && FileCrypto.TryOpen(main, password, ref c, out plain)) ||
+                (bakEnc && FileCrypto.TryOpen(bak, password, ref c, out plain)))
+            {
+                crypto = c;
+                return true;
+            }
+            if (!checkable)
+            {
+                crypto = FileCrypto.Create(password);
+                return true;
+            }
+        }
+    }
+
+    // 文件内容（加密的先解密）；加密的文件解不开（损坏）时返回 null
+    byte[] ReadPlain(string path)
+    {
+        byte[] data = File.ReadAllBytes(path);
+        if (!FileCrypto.IsEncrypted(data)) return data;
+        byte[] plain;
+        return crypto != null && crypto.TryDecrypt(data, out plain) ? plain : null;
+    }
 
     // phrases.txt 每行：中文|English|点击次数|钉住（后三项可省略）
     void ParseLines(string[] lines)
@@ -102,23 +148,35 @@ class PhraseStore
     // 程序启动时读入。需要时顺带保存：从备份恢复、首次写入默认词条、补默认词条、首次启用统计
     public void Load()
     {
+        // 加了密码却没有先 Unlock：什么都不做（之后的保存也会跳过），绝不覆盖加密的文件
+        if (crypto == null && (FileCrypto.IsEncrypted(ReadIfExists(file)) || FileCrypto.IsEncrypted(ReadIfExists(backupFile))))
+        {
+            locked = true;
+            OnError("词条文件已加密，需要输入启动密码");
+            return;
+        }
         try
         {
             bool recovered = false, fillDefaults = false;
             if (File.Exists(file))
             {
-                byte[] data = File.ReadAllBytes(file);
-                string[] lines = ToLines(data);
-                int whole = ParseLinesCountingWhole(lines, EndsWithNewline(data));
+                byte[] data = ReadPlain(file);  // 加密文件解不开（损坏）时为 null，当作空文件
+                string[] lines = data != null ? ToLines(data) : new string[0];
+                int whole = data != null ? ParseLinesCountingWhole(lines, EndsWithNewline(data)) : 0;
                 // 一条完整的词条也读不出来（空文件，或保存时断电被截断成半截），而备份还在：从备份恢复
                 if (whole == 0 && File.Exists(backupFile) && new FileInfo(backupFile).Length > 0)
                 {
-                    Phrases.Clear();  // 丢掉截断留下的半行
-                    ParseLines(ToLines(File.ReadAllBytes(backupFile)));
-                    recovered = Phrases.Count > 0;
+                    byte[] bak = ReadPlain(backupFile);
+                    if (bak != null)
+                    {
+                        Phrases.Clear();  // 丢掉截断留下的半行
+                        ParseLines(ToLines(bak));
+                        recovered = Phrases.Count > 0;
+                    }
                 }
                 // 空文件、又没能从备份恢复：和第一次运行一样写入完整的默认词条
                 fillDefaults = !recovered && lines.Length == 0;
+                if (data == null && !recovered) OnError("词条文件已损坏，无法解密");
             }
             else ParseLines(Defaults);
             if (recovered) { Save(); OnError("词条文件为空或已损坏，已从备份恢复"); }
@@ -212,8 +270,10 @@ class PhraseStore
         catch { }
     }
 
-    public void Save()
+    // 保存到 phrases.txt（开了密码时加密）；失败时提示并返回 false
+    public bool Save()
     {
+        if (locked) return false;
         try
         {
             List<string> lines = new List<string>();
@@ -221,30 +281,76 @@ class PhraseStore
             foreach (Phrase p in Phrases)
                 lines.Add(Phrase.Clean(p.Zh) + "|" + Phrase.Clean(p.En) + "|" + p.Count + (p.Pinned ? "|1" : ""));
             byte[] data = new UTF8Encoding(false).GetBytes(string.Join("\r\n", lines.ToArray()) + "\r\n");
-
-            // 先完整写入临时文件并刷到磁盘，再替换正式文件；中途断电也不会把 phrases.txt 写成半截
-            string tmp = file + ".tmp";
-            if (File.Exists(tmp)) { File.SetAttributes(tmp, FileAttributes.Normal); File.Delete(tmp); }
-            using (FileStream fs = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write))
-            {
-                fs.Write(data, 0, data.Length);
-                fs.Flush(true);
-            }
-            if (File.Exists(file))
-            {
-                File.SetAttributes(file, FileAttributes.Normal);  // 隐藏文件不能直接被替换
-                try { File.Replace(tmp, file, null); }
-                catch
-                {
-                    // 某些磁盘（如网络共享）不支持替换，退回为覆盖复制
-                    File.Copy(tmp, file, true);
-                    File.Delete(tmp);
-                }
-            }
-            else File.Move(tmp, file);
+            if (crypto != null) data = crypto.Encrypt(data);
+            WriteReplacing(file, data);
+            return true;
         }
-        catch { OnError("保存失败（目录只读？）"); }
+        catch { OnError("保存失败（目录只读？）"); return false; }
         finally { if (File.Exists(file)) HideFile(); }
+    }
+
+    // 先完整写入临时文件并刷到磁盘，再替换正式文件；中途断电也不会把正式文件写成半截
+    static void WriteReplacing(string path, byte[] data)
+    {
+        string tmp = path + ".tmp";
+        if (File.Exists(tmp)) { File.SetAttributes(tmp, FileAttributes.Normal); File.Delete(tmp); }
+        using (FileStream fs = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write))
+        {
+            fs.Write(data, 0, data.Length);
+            fs.Flush(true);
+        }
+        if (File.Exists(path))
+        {
+            File.SetAttributes(path, FileAttributes.Normal);  // 隐藏文件不能直接被替换
+            try { File.Replace(tmp, path, null); }
+            catch
+            {
+                // 某些磁盘（如网络共享）不支持替换，退回为覆盖复制
+                File.Copy(tmp, path, true);
+                File.Delete(tmp);
+            }
+        }
+        else File.Move(tmp, path);
+    }
+
+    // ---------- 启动密码 ----------
+
+    public bool CheckPassword(string password) { return crypto != null && crypto.Matches(password); }
+
+    // 开启或修改启动密码：词条文件和备份都改用新密码加密。失败时保持原样并返回 false
+    public bool SetPassword(string password) { return ChangeEncryption(FileCrypto.Create(password)); }
+
+    // 关闭启动密码：词条文件和备份都还原成明文（与从没加密过时完全一样）
+    public bool RemovePassword() { return ChangeEncryption(null); }
+
+    bool ChangeEncryption(FileCrypto next)
+    {
+        if (locked) return false;
+        FileCrypto old = crypto;
+        // 先用旧密钥读出备份的明文（备份可能是明文，也可能是旧密码加密的）
+        byte[] bak = ReadIfExists(backupFile);
+        byte[] bakPlain = null;
+        if (bak != null && !FileCrypto.IsEncrypted(bak)) bakPlain = bak;
+        else if (bak != null && old != null) old.TryDecrypt(bak, out bakPlain);
+        crypto = next;
+        if (!Save()) { crypto = old; return false; }
+        try
+        {
+            if (bak == null) return true;
+            if (bakPlain == null)
+            {
+                // 解不开的旧备份（不是当前密码加密的）已经没用，留着只会让启动时还要密码
+                File.SetAttributes(backupFile, FileAttributes.Normal);
+                File.Delete(backupFile);
+                return true;
+            }
+            DateTime when = File.GetLastWriteTime(backupFile);  // 保留备份日期，每日备份的节奏不变
+            WriteReplacing(backupFile, next != null ? next.Encrypt(bakPlain) : bakPlain);
+            File.SetLastWriteTime(backupFile, when);
+            File.SetAttributes(backupFile, FileAttributes.Hidden);
+        }
+        catch { OnError("备份文件更新失败"); }
+        return true;
     }
 
     public bool Exists(string zh, Phrase except)
