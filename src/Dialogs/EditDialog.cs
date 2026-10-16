@@ -8,10 +8,8 @@ class EditDialog : Form
     readonly TextBox tZh = new TextBox();
     readonly TextBox tEn = new TextBox();
 
-    public string Zh { get { return Clean(tZh.Text); } }
-    public string En { get { return Clean(tEn.Text); } }
-
-    static string Clean(string s) { return s.Replace('|', '｜').Trim(); }
+    public string Zh { get { return Phrase.Clean(tZh.Text); } }
+    public string En { get { return Phrase.Clean(tEn.Text); } }
 
     public EditDialog(string title, string zh, string en)
     {

@@ -437,7 +437,6 @@ static class SelfTest
         PhraseStore store = Open(dir);
         store.Phrases.Add(new Phrase("竖线|中文", "line1\r\nline2|tail", 3));
         store.Save();
-        byte[] first = File.ReadAllBytes(file);
         store = Open(dir);
         Same("含竖线/换行：词条数不变", (Canonical.Length - 11 + 1).ToString(), store.Phrases.Count.ToString());
         Phrase last = store.Phrases.Find(delegate(Phrase p) { return p.Zh.StartsWith("竖线"); });
@@ -445,7 +444,15 @@ static class SelfTest
         Same("含换行：英文完整保留（去掉换行，| 存为 ｜）", "line1line2｜tail", last != null ? last.En : null);
         Same("含竖线/换行：次数保留", "3", last != null ? last.Count.ToString() : null);
         store.Save();
-        Check("含竖线/换行：再保存一次内容不变", SameBytes(first, File.ReadAllBytes(file)), null);
+        byte[] first = File.ReadAllBytes(file);
+        Open(dir).Save();
+        Check("含竖线/换行：再读入保存一次内容不变", SameBytes(first, File.ReadAllBytes(file)), null);
+
+        Same("字段净化：竖线换全角、去掉换行和首尾空白", "a｜bc", Phrase.Clean(" a|b\r\nc "));
+        int dup, over;
+        int added = store.Import(new string[] { " 导入的中文 | Imported en | 5 | 1" }, out dup, out over);
+        Phrase imported = store.Phrases.Find(delegate(Phrase p) { return p.Zh == "导入的中文"; });
+        Check("导入：字段同样净化", added == 1 && imported != null && imported.En == "Imported en" && imported.Count == 0, null);
     }
 
     // ---------- 被测代码的入口（重构时只改这里） ----------

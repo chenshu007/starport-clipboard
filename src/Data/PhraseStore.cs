@@ -219,7 +219,7 @@ class PhraseStore
             List<string> lines = new List<string>();
             Settings.WriteTo(lines);
             foreach (Phrase p in Phrases)
-                lines.Add(p.Zh + "|" + p.En + "|" + p.Count + (p.Pinned ? "|1" : ""));
+                lines.Add(Phrase.Clean(p.Zh) + "|" + Phrase.Clean(p.En) + "|" + p.Count + (p.Pinned ? "|1" : ""));
             byte[] data = new UTF8Encoding(false).GetBytes(string.Join("\r\n", lines.ToArray()) + "\r\n");
 
             // 先完整写入临时文件并刷到磁盘，再替换正式文件；中途断电也不会把 phrases.txt 写成半截
@@ -258,7 +258,7 @@ class PhraseStore
     public void Export(string path)
     {
         List<string> lines = new List<string>();
-        foreach (Phrase p in Phrases) lines.Add(p.Zh + "|" + p.En);
+        foreach (Phrase p in Phrases) lines.Add(Phrase.Clean(p.Zh) + "|" + Phrase.Clean(p.En));
         File.WriteAllLines(path, lines.ToArray(), new UTF8Encoding(true));
     }
 
@@ -272,9 +272,9 @@ class PhraseStore
         {
             if (line.Trim().Length == 0 || Settings.IsSettingLine(line)) continue;
             string[] parts = line.Split('|');
-            string zh = parts[0].Trim();
+            string zh = Phrase.Clean(parts[0]);
             if (zh.Length == 0) continue;
-            string en = parts.Length > 1 ? parts[1].Trim() : "";
+            string en = parts.Length > 1 ? Phrase.Clean(parts[1]) : "";
             if (Exists(zh, null)) { dup++; continue; }
             if (Phrases.Count >= MaxPhrases) { over++; continue; }
             Phrases.Add(new Phrase(zh, en, 0));
