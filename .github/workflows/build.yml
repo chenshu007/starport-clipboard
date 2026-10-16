@@ -21,6 +21,16 @@ jobs:
         shell: cmd
         run: build.bat
 
+      # 窗口程序没有控制台：结果重定向到文件再打印；全部通过时退出码为 0
+      - name: Self-test
+        shell: cmd
+        timeout-minutes: 3
+        run: |
+          StarportHaiku.exe --self-test > "%RUNNER_TEMP%\selftest.log" 2>&1
+          set RC=%ERRORLEVEL%
+          type "%RUNNER_TEMP%\selftest.log"
+          exit /b %RC%
+
       - uses: actions/upload-artifact@v4
         with:
           name: StarportHaiku
