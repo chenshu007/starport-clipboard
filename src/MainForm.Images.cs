@@ -17,7 +17,7 @@ partial class MainForm
         imagePanel.DragDrop += OnImageDragDrop;
 
         imageHeader.Dock = DockStyle.Top;
-        imageHeader.Height = 36;
+        imageHeader.Height = ImageHeaderH;
         imageHeader.AllowDrop = true;
         imageHeader.DragEnter += OnImageDragEnter;
         imageHeader.DragDrop += OnImageDragDrop;
@@ -27,10 +27,10 @@ partial class MainForm
                 new Rectangle(104, 4, 196, 28), Theme.Muted, TextFormatFlags.Left);
         };
         btnPasteImg.Outline = true;
-        btnPasteImg.SetBounds(14, 5, 82, 26);
+        btnPasteImg.SetBounds(Pad, 5, 82, 26);
         btnPasteImg.Click += delegate { PasteImage(); };
         btnClearImg.Outline = true;
-        btnClearImg.SetBounds(FormW - 70, 5, 56, 26);
+        btnClearImg.SetBounds(FormW - Pad - 56, 5, 56, 26);
         btnClearImg.Click += delegate { ClearImages(); };
         imageHeader.Controls.Add(btnPasteImg);
         imageHeader.Controls.Add(btnClearImg);
@@ -45,7 +45,7 @@ partial class MainForm
             if (stash.Count == 0)
             {
                 Theme.Text(e.Graphics, "暂无参考图片 · 点「粘贴截图」或拖入图片文件", Theme.Small,
-                    new Rectangle(14, 0, imageGrid.Width - 28, imageGrid.Height),
+                    new Rectangle(Pad, 0, imageGrid.Width - 2 * Pad, imageGrid.Height),
                     Theme.Muted, TextFormatFlags.HorizontalCenter);
             }
         };
@@ -171,8 +171,8 @@ partial class MainForm
         for (int i = 0; i < stash.Count; i++)
         {
             ImageCard ic = new ImageCard(stash[i]);
-            int col = i % 3, row = i / 3;
-            ic.Location = new Point(14 + col * (104 + 10), 6 + row * (78 + 8));
+            int col = i % ImageCols, row = i / ImageCols;
+            ic.Location = new Point(Pad + col * (ImageCard.W + ImageGapX), ImageGridTop + row * (ImageCard.H + ImageGapY));
             ic.ViewRequested += delegate(ImageCard k) { BeginInvoke((MethodInvoker)delegate { ViewImage(k.Img); }); };
             ic.DeleteRequested += delegate(ImageCard k) { BeginInvoke((MethodInvoker)delegate { RemoveImage(k.Img); }); };
             ic.AllowDrop = true;

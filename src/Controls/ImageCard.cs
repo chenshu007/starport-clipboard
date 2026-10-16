@@ -5,6 +5,8 @@ using System.Windows.Forms;
 
 class ImageCard : Control
 {
+    public const int W = 104, H = 78;  // 缩略图卡片尺寸
+
     public readonly Image Img;
     public event Action<ImageCard> ViewRequested, DeleteRequested;
 
@@ -18,7 +20,7 @@ class ImageCard : Control
         SetStyle(ControlStyles.Selectable, false);
         BackColor = Theme.Bg;
         Cursor = Cursors.Hand;
-        Size = new Size(104, 78);
+        Size = new Size(W, H);
     }
 
     Rectangle DelRect { get { return new Rectangle(Width - 24, 4, 20, 20); } }

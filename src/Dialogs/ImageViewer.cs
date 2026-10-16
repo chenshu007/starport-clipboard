@@ -6,6 +6,10 @@ using System.Windows.Forms;
 // 放大查看图片窗口：点击或按 Esc 关闭，绝不写入剪贴板
 class ImageViewer : Form
 {
+    const double MaxScreenShare = 0.8;  // 窗口最多占屏幕工作区的比例
+    const int Pad = 24;                 // 图片四周留白（两边合计）
+    const int MinW = 200, MinH = 150;
+
     readonly Image img;
 
     public ImageViewer(Image image)
@@ -25,11 +29,10 @@ class ImageViewer : Form
         AutoScaleMode = AutoScaleMode.None;
 
         Rectangle wa = Screen.FromPoint(Cursor.Position).WorkingArea;
-        int maxW = (int)(wa.Width * 0.8), maxH = (int)(wa.Height * 0.8);
-        int pad = 24;
-        float scale = Math.Min(1f, Math.Min((float)(maxW - pad) / Math.Max(1, img.Width), (float)(maxH - pad) / Math.Max(1, img.Height)));
-        int cw = Math.Max(200, (int)Math.Round(img.Width * scale) + pad);
-        int ch = Math.Max(150, (int)Math.Round(img.Height * scale) + pad);
+        int maxW = (int)(wa.Width * MaxScreenShare), maxH = (int)(wa.Height * MaxScreenShare);
+        float scale = Math.Min(1f, Math.Min((float)(maxW - Pad) / Math.Max(1, img.Width), (float)(maxH - Pad) / Math.Max(1, img.Height)));
+        int cw = Math.Max(MinW, (int)Math.Round(img.Width * scale) + Pad);
+        int ch = Math.Max(MinH, (int)Math.Round(img.Height * scale) + Pad);
         ClientSize = new Size(Math.Min(maxW, cw), Math.Min(maxH, ch));
         Location = new Point(wa.Left + (wa.Width - Width) / 2, wa.Top + (wa.Height - Height) / 2);
 
@@ -54,8 +57,8 @@ class ImageViewer : Form
         g.Clear(Theme.Bg);
         if (img == null || img.Width <= 0 || img.Height <= 0) return;
 
-        float availW = Math.Max(1, ClientSize.Width - 24);
-        float availH = Math.Max(1, ClientSize.Height - 24);
+        float availW = Math.Max(1, ClientSize.Width - Pad);
+        float availH = Math.Max(1, ClientSize.Height - Pad);
         float scale = Math.Min(1f, Math.Min(availW / img.Width, availH / img.Height));
         float dw = img.Width * scale, dh = img.Height * scale;
         float dx = (ClientSize.Width - dw) / 2f, dy = (ClientSize.Height - dh) / 2f;

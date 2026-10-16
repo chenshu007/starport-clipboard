@@ -11,8 +11,30 @@ using System.Windows.Forms;
 
 partial class MainForm : Form
 {
+    // 布局（像素）：窗口宽度固定，高度按卡片数自动调整
     const int FormW = 380, HeaderH = 80, FooterH = 52, ContextBarH = 34, ImageAreaH = 216;
-    const int MaxVisibleCards = 10;
+    const int Pad = 14;                       // 左右边距
+    const int HeaderBtn = 32, HeaderBtnY = 12;  // 右上角 📌 ⚙ 按钮
+    const int MaxVisibleCards = 10;           // 列表区最多同时显示的卡片数（对应数字键 1–0）
+    const int ListTop = 10, ListBottom = 4;   // 卡片列表上下留白
+    const int PeekH = 18;                     // 超过 10 张时露出下一张的高度
+    const int MinListH = 64;
+    const double MaxScreenShare = 0.85;       // 整个窗口最多占屏幕工作区高度的比例
+    const int InitialClientH = 300;           // 算出实际高度之前的临时高度
+    const int DefaultRight = 20, DefaultTop = 60;  // 默认位置：工作区右上角往里
+    // 底部从右往左：＋ 新增、管理、撤销（删除后临时出现）；左边是提示文字
+    const int FooterBtnY = 11, FooterBtnH = 30;
+    const int AddW = 92, ManageW = 64, UndoW = 56;
+    const int AddX = FormW - Pad - AddW, ManageX = AddX - 8 - ManageW, UndoX = ManageX - 6 - UndoW;
+    const int StatusW = ManageX - 4 - Pad, StatusWithUndoW = UndoX - 4 - Pad;
+    // 图片区：缩略图每行 3 张
+    const int ImageHeaderH = 36, ImageCols = 3, ImageGapX = 10, ImageGapY = 8, ImageGridTop = 6;
+
+    // 时间（毫秒）
+    const int FlashMs = 1600;     // 底部提示显示多久
+    const int UndoMs = 6000;      // 删除后「撤销」按钮保留多久
+    const int DayCheckMs = 30000; // 多久检查一次营业日是否变了（卡片上的日期要跟着变）
+    const int TooltipDelayMs = 700;
 
     Phrase undoPhrase;     // 刚删除、还能撤销的词条
     int undoIndex;
@@ -79,18 +101,18 @@ partial class MainForm : Form
         catch { }
 
         toolTip.ShowAlways = true;  // 窗口不激活时也显示完整文字
-        toolTip.InitialDelay = 700;
+        toolTip.InitialDelay = TooltipDelayMs;
 
         header.Dock = DockStyle.Top;
         header.Height = HeaderH;
         header.Paint += PaintHeader;
         header.MouseUp += OnHeaderClick;
         btnPin.Font = Theme.Sym;
-        btnPin.SetBounds(FormW - 84, 12, 32, 32);
+        btnPin.SetBounds(FormW - Pad - 2 * HeaderBtn - 6, HeaderBtnY, HeaderBtn, HeaderBtn);
         btnPin.Click += delegate { ToggleTopMost(); };
         btnSettings.Outline = true;
         btnSettings.Font = Theme.Sym;
-        btnSettings.SetBounds(FormW - 46, 12, 32, 32);
+        btnSettings.SetBounds(FormW - Pad - HeaderBtn, HeaderBtnY, HeaderBtn, HeaderBtn);
         btnSettings.Click += delegate { OpenSettings(); };
         toolTip.SetToolTip(btnSettings, "设置");
         header.Controls.Add(btnPin);
@@ -103,10 +125,10 @@ partial class MainForm : Form
         contextBar.Height = ContextBarH;
         contextBar.Paint += delegate(object o, PaintEventArgs e)
         {
-            using (Pen p = new Pen(Theme.Line)) e.Graphics.DrawLine(p, 14, 0, contextBar.Width - 14, 0);
+            using (Pen p = new Pen(Theme.Line)) e.Graphics.DrawLine(p, Pad, 0, contextBar.Width - Pad, 0);
         };
         btnContext.Outline = true;
-        btnContext.SetBounds(14, 4, FormW - 28, 26);
+        btnContext.SetBounds(Pad, 4, FormW - 2 * Pad, 26);
         btnContext.Click += delegate { ToggleContext(); };
         toolTip.SetToolTip(btnContext, "Expand context window");
         contextBar.Controls.Add(btnContext);
@@ -119,18 +141,18 @@ partial class MainForm : Form
         {
             using (Pen p = new Pen(Theme.Line)) e.Graphics.DrawLine(p, 0, 0, footer.Width, 0);
         };
-        status.SetBounds(14, 15, FormW - 196, 22);
+        status.SetBounds(Pad, 15, StatusW, 22);
         btnUndo.Outline = true;
-        btnUndo.SetBounds(FormW - 240, 11, 56, 30);
+        btnUndo.SetBounds(UndoX, FooterBtnY, UndoW, FooterBtnH);
         btnUndo.Visible = false;
         btnUndo.Click += delegate { UndoDelete(); };
         footer.Controls.Add(btnUndo);
         status.ForeColor = Theme.Clay;
         status.AutoEllipsis = true;
-        btnAdd.SetBounds(FormW - 106, 11, 92, 30);
+        btnAdd.SetBounds(AddX, FooterBtnY, AddW, FooterBtnH);
         btnAdd.Click += delegate { AddPhrase(); };
         btnManage.Outline = true;
-        btnManage.SetBounds(FormW - 178, 11, 64, 30);
+        btnManage.SetBounds(ManageX, FooterBtnY, ManageW, FooterBtnH);
         btnManage.Click += delegate { SetManage(!manage); };
         footer.Controls.Add(status);
         footer.Controls.Add(btnManage);
@@ -145,7 +167,7 @@ partial class MainForm : Form
 
         shownDate = DateTokens.BusinessDate;
         System.Windows.Forms.Timer dayTimer = new System.Windows.Forms.Timer();
-        dayTimer.Interval = 30000;
+        dayTimer.Interval = DayCheckMs;
         dayTimer.Tick += delegate
         {
             if (DateTokens.BusinessDate == shownDate) return;
@@ -154,15 +176,15 @@ partial class MainForm : Form
         };
         dayTimer.Start();
 
-        tip.Interval = 1600;
+        tip.Interval = FlashMs;
         tip.Tick += delegate { tip.Stop(); ShowIdleStatus(); };
 
         KeyDown += OnKey;
         store.Load();
         UpdatePinButton();
-        ClientSize = new Size(FormW, 300);
+        ClientSize = new Size(FormW, InitialClientH);
         Rectangle wa = Screen.PrimaryScreen.WorkingArea;
-        Location = new Point(wa.Right - Width - 20, wa.Top + 60);
+        Location = new Point(wa.Right - Width - DefaultRight, wa.Top + DefaultTop);
         if (settings.HasWinPos && IsOnScreen(settings.WinPos)) Location = settings.WinPos;  // 恢复上次的位置
         Rebuild();
 
@@ -295,22 +317,22 @@ partial class MainForm : Form
 
     int CalcListHeight(out int totalCardH)
     {
-        totalCardH = 10;
-        int visibleH = 10;
+        totalCardH = ListTop;
+        int visibleH = ListTop;
         for (int i = 0; i < store.Phrases.Count; i++)
         {
             int ch = Card.HeightFor(store.Phrases[i]);
             totalCardH += ch;
             if (i < MaxVisibleCards) visibleH += ch;
         }
-        totalCardH += 4;
-        visibleH += store.Phrases.Count > MaxVisibleCards ? 18 : 4;  // 还有更多时露出下一张的一截
+        totalCardH += ListBottom;
+        visibleH += store.Phrases.Count > MaxVisibleCards ? PeekH : ListBottom;  // 还有更多时露出下一张的一截
 
         // 整个窗口最多占屏幕工作区 85%；展开图片区时列表让出高度，改为滚动
         Rectangle wa = Screen.FromControl(this).WorkingArea;
-        int maxClient = (int)(wa.Height * 0.85) - SystemInformation.CaptionHeight;
+        int maxClient = (int)(wa.Height * MaxScreenShare) - SystemInformation.CaptionHeight;
         int maxList = maxClient - HeaderH - ContextBarH - FooterH - (contextExpanded ? ImageAreaH : 0);
-        return Math.Max(64, Math.Min(visibleH, maxList));
+        return Math.Max(MinListH, Math.Min(visibleH, maxList));
     }
 
     void UpdateWindowSize()
@@ -352,12 +374,12 @@ partial class MainForm : Form
 
         int total;
         int listH = CalcListHeight(out total);
-        int cardW = FormW - 28 - (total > listH ? SystemInformation.VerticalScrollBarWidth : 0);
+        int cardW = FormW - 2 * Pad - (total > listH ? SystemInformation.VerticalScrollBarWidth : 0);
 
-        int y = 10;
+        int y = ListTop;
         foreach (Card c in cards)
         {
-            c.SetBounds(14, y, cardW, c.Height);
+            c.SetBounds(Pad, y, cardW, c.Height);
             // 只有文字被截断的卡片才显示完整内容提示
             toolTip.SetToolTip(c, c.IsTruncated ? (c.P.En.Length > 0 ? c.ZhText + "\n" + c.EnText : c.ZhText) : null);
             y += c.Height;
@@ -457,10 +479,10 @@ partial class MainForm : Form
         Flash("已删除「" + name + "」", false);
         undoPhrase = p;
         undoIndex = idx;
-        status.Width = FormW - 258;  // 给「撤销」按钮让位
+        status.Width = StatusWithUndoW;  // 给「撤销」按钮让位
         btnUndo.Visible = true;
         tip.Stop();
-        tip.Interval = 6000;
+        tip.Interval = UndoMs;
         tip.Start();
     }
 
@@ -468,7 +490,7 @@ partial class MainForm : Form
     {
         undoPhrase = null;
         btnUndo.Visible = false;
-        status.Width = FormW - 196;
+        status.Width = StatusW;
     }
 
     void UndoDelete()
@@ -592,7 +614,7 @@ partial class MainForm : Form
         status.ForeColor = err ? Color.Firebrick : Theme.Clay;
         status.Text = msg;
         tip.Stop();
-        tip.Interval = 1600;
+        tip.Interval = FlashMs;
         tip.Start();
     }
 }

@@ -57,10 +57,12 @@
 
 | 目录 | 内容 |
 | --- | --- |
-| `src/` | 主窗口 `MainForm`、自动检查 `SelfTest` |
+| `src/` | 入口 `Program`（单实例、`--self-test`）、主窗口 `MainForm`（图片区界面在 `MainForm.Images.cs`）、系统调用 `NativeMethods`、自动检查 `SelfTest` |
 | `src/Controls/` | 界面控件：配色字体 `Theme`、词条卡片 `Card`、圆角按钮 `PillButton`、图片缩略图 `ImageCard` |
-| `src/Dialogs/` | 对话框：新增/编辑、份数、设置、用量统计、查看图片 |
-| `src/Data/` | 数据：词条 `Phrase`、日期/数量占位符 `DateTokens` |
+| `src/Dialogs/` | 对话框：新增/编辑、份数、设置、用量统计、查看图片，以及共用的按钮样式 `DialogButtons` |
+| `src/Data/` | 数据：词条文件 `PhraseStore`（读写、备份、恢复、默认词条迁移、导入导出）、设置项 `Settings`、用量统计 `UsageStats`、图片暂存区 `ImageStash`、词条 `Phrase`、日期/数量占位符 `DateTokens` |
+
+新增一个 `#key=value` 设置项：在 `Settings` 里 `Register` 一次即可，读法和写法写在一起，登记顺序就是写进 `phrases.txt` 的顺序。
 
 自动检查：编译后运行 `StarportHaiku.exe --self-test > selftest.log`，全部通过时退出码为 0，结果写在 `selftest.log` 里（覆盖 phrases.txt 读写往返、设置行识别、占位符替换，只在临时目录里读写）。
 

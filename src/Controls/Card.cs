@@ -33,7 +33,17 @@ class Card : Control
     }
 
     public const int Gap = 4;  // 卡片之间的间距
-    public static int HeightFor(Phrase p) { return p.En.Length > 0 ? 52 : 40; }
+    const int HeightTwoLines = 52, HeightOneLine = 40;  // 有英文时显示两行（含间距）
+    public static int HeightFor(Phrase p) { return p.En.Length > 0 ? HeightTwoLines : HeightOneLine; }
+
+    // 右侧按钮：平时是 EN，管理模式是 📌 ✎ ✕（从右往左），离卡片右边 Edge
+    const int Edge = 10;
+    const int ChipW = 32, ChipH = 22;          // EN
+    const int IconSize = 28, IconStep = 30;    // 📌 ✎ ✕
+    const int CountW = 48;                     // 管理模式的「n 次」
+    const int TextLeft = 38;                   // 文字左边（左侧是序号）
+    const int Radius = 10;
+    const int FadeH = 28;                      // 列表可视区底边的渐隐高度
 
     int BoxH { get { return Height - Gap; } }
 
@@ -41,18 +51,18 @@ class Card : Control
     protected override void OnLocationChanged(EventArgs e) { base.OnLocationChanged(e); Invalidate(); }
 
     // 右侧按钮区的位置只取决于卡片尺寸，与悬停无关，所以不会跳动
-    Rectangle EnRect { get { return new Rectangle(Width - 42, (BoxH - 22) / 2, 32, 22); } }
-    Rectangle DelRect { get { return new Rectangle(Width - 38, (BoxH - 28) / 2, 28, 28); } }
-    Rectangle EditRect { get { return new Rectangle(Width - 68, (BoxH - 28) / 2, 28, 28); } }
-    Rectangle PinRect { get { return new Rectangle(Width - 98, (BoxH - 28) / 2, 28, 28); } }
-    Rectangle CountRect { get { return new Rectangle(PinRect.Left - 50, 0, 48, BoxH); } }  // 管理模式：点击次数
+    Rectangle EnRect { get { return new Rectangle(Width - (Edge + ChipW), (BoxH - ChipH) / 2, ChipW, ChipH); } }
+    Rectangle DelRect { get { return new Rectangle(Width - (Edge + IconSize), (BoxH - IconSize) / 2, IconSize, IconSize); } }
+    Rectangle EditRect { get { return new Rectangle(Width - (Edge + IconSize + IconStep), (BoxH - IconSize) / 2, IconSize, IconSize); } }
+    Rectangle PinRect { get { return new Rectangle(Width - (Edge + IconSize + 2 * IconStep), (BoxH - IconSize) / 2, IconSize, IconSize); } }
+    Rectangle CountRect { get { return new Rectangle(PinRect.Left - (CountW + 2), 0, CountW, BoxH); } }  // 管理模式：点击次数
 
     Rectangle TextArea
     {
         get
         {
             int right = Manage ? CountRect.Left - 4 : (P.En.Length > 0 ? EnRect.Left - 8 : Width - 12);
-            return new Rectangle(38, 0, Math.Max(10, right - 38), BoxH);
+            return new Rectangle(TextLeft, 0, Math.Max(10, right - TextLeft), BoxH);
         }
     }
 
@@ -121,7 +131,7 @@ class Card : Control
 
         int h = BoxH;
         RectangleF box = new RectangleF(0.5f, 0.5f, Width - 1.5f, h - 1);
-        using (GraphicsPath path = Theme.Round(box, 10))
+        using (GraphicsPath path = Theme.Round(box, Radius))
         using (SolidBrush b = new SolidBrush(hover ? Theme.CardHover : Theme.Card))
         using (Pen pen = new Pen(hover ? Theme.Clay : Theme.Line))
         {
@@ -176,7 +186,7 @@ class Card : Control
             int viewBottom = Parent.ClientSize.Height - Top;  // 列表可视区底边在卡片坐标中的位置
             if (viewBottom > 0 && viewBottom < Height)
             {
-                Rectangle fade = new Rectangle(0, viewBottom - 28, Width, 28);
+                Rectangle fade = new Rectangle(0, viewBottom - FadeH, Width, FadeH);
                 using (LinearGradientBrush lb = new LinearGradientBrush(
                     new Rectangle(fade.X, fade.Y - 1, fade.Width, fade.Height + 2),
                     Color.FromArgb(0, Theme.Bg), Theme.Bg, LinearGradientMode.Vertical))
