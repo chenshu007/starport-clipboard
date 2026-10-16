@@ -79,11 +79,11 @@ class SettingsDialog : Form
         UpdatePreview();
 
         // 底部：版本号 + 官网链接（点击用浏览器打开）
-        string ver = MainForm.ReadVersion();
+        string ver = Program.ReadVersion();
         string prefix = (ver.Length > 0 ? "v" + ver + " · " : "");
         LinkLabel about = new LinkLabel();
-        about.Text = prefix + MainForm.Website;
-        about.LinkArea = new LinkArea(prefix.Length, MainForm.Website.Length);
+        about.Text = prefix + Program.Website;
+        about.LinkArea = new LinkArea(prefix.Length, Program.Website.Length);
         about.LinkBehavior = LinkBehavior.HoverUnderline;
         about.ForeColor = Theme.Muted;
         about.LinkColor = Theme.Clay;
@@ -91,7 +91,7 @@ class SettingsDialog : Form
         about.SetBounds(20, 284, 300, 20);
         about.LinkClicked += delegate
         {
-            try { System.Diagnostics.Process.Start("https://" + MainForm.Website); }
+            try { System.Diagnostics.Process.Start("https://" + Program.Website); }
             catch { MessageBox.Show(this, "无法打开浏览器", "Starport", MessageBoxButtons.OK, MessageBoxIcon.Information); }
         };
 

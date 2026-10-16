@@ -9,21 +9,14 @@ using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 
-// Starport Haiku（固定剪贴板）：点卡片复制中文，点 EN 复制英文；窗口置顶，点击卡片不抢目标软件焦点
-
 partial class MainForm : Form
 {
-    const int WM_MOUSEACTIVATE = 0x21;
-    const int MA_NOACTIVATE = 3;
-    const int HTCLIENT = 1;
     const int FormW = 380, HeaderH = 80, FooterH = 52, ContextBarH = 34, ImageAreaH = 216;
     const int MaxVisibleCards = 10;
 
     Phrase undoPhrase;     // 刚删除、还能撤销的词条
     int undoIndex;
 
-    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
-    [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hWnd);
     DateTime shownDate;
 
     readonly PhraseStore store;  // phrases.txt：词条、设置、用量统计
@@ -53,47 +46,7 @@ partial class MainForm : Form
     readonly ToolTip toolTip = new ToolTip();
     Image logo;
 
-    [DllImport("user32.dll")] static extern int RegisterWindowMessage(string name);
-    [DllImport("user32.dll")] static extern bool PostMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
-    [DllImport("user32.dll")] static extern bool AllowSetForegroundWindow(int processId);
-
-    // 同一个文件夹只允许运行一个实例（两个实例同时写 phrases.txt 会互相覆盖）
-    static string InstanceKey;
-    int showMsg;
-
-    static string MakeInstanceKey()
-    {
-        string path = AppDomain.CurrentDomain.BaseDirectory.ToLowerInvariant();
-        uint h = 2166136261;  // FNV-1a，跨进程稳定
-        foreach (char ch in path) { h ^= ch; h *= 16777619; }
-        return "StarportFixedClipboard_" + h.ToString("X8");  // 沿用旧名，新旧版本放同一文件夹也不会同时运行
-    }
-
-    [STAThread]
-    static int Main(string[] args)
-    {
-        if (Array.IndexOf(args, "--self-test") >= 0) return SelfTest.Run();
-        InstanceKey = MakeInstanceKey();
-        Mutex mutex = null;
-        bool first = true;
-        try { mutex = new Mutex(true, "Local\\" + InstanceKey, out first); } catch { first = true; }
-        if (!first)
-        {
-            // 已经在运行：通知原来的窗口显示到最前面，然后退出
-            try
-            {
-                AllowSetForegroundWindow(-1);
-                PostMessage((IntPtr)0xFFFF, RegisterWindowMessage(InstanceKey), IntPtr.Zero, IntPtr.Zero);
-            }
-            catch { }
-            return 0;
-        }
-        Application.EnableVisualStyles();
-        Application.SetCompatibleTextRenderingDefault(false);
-        Application.Run(new MainForm());
-        GC.KeepAlive(mutex);
-        return 0;
-    }
+    int showMsg;  // 再次打开 exe 时，新进程发来的「显示窗口」消息号
 
     public MainForm()
     {
@@ -101,7 +54,7 @@ partial class MainForm : Form
         store.Error += delegate(string msg) { Flash(msg, true); };
         settings = store.Settings;
         stats = store.Stats;
-        string ver = ReadVersion();
+        string ver = Program.ReadVersion();
         Text = "Starport Haiku" + (ver.Length > 0 ? " v" + ver : "");
         Font = Theme.Small;
         BackColor = Theme.Bg;
@@ -213,7 +166,7 @@ partial class MainForm : Form
         if (settings.HasWinPos && IsOnScreen(settings.WinPos)) Location = settings.WinPos;  // 恢复上次的位置
         Rebuild();
 
-        try { showMsg = RegisterWindowMessage(InstanceKey); } catch { showMsg = 0; }
+        showMsg = NativeMethods.RegisterMessage(Program.InstanceKey);
         ResizeEnd += delegate { RememberPosition(); };  // 拖动窗口结束时记住位置
         FormClosing += delegate { RememberPosition(); };
     }
@@ -244,22 +197,6 @@ partial class MainForm : Form
         base.OnFormClosed(e);
     }
 
-    // 版本号来自编译时打包进 exe 的 VERSION 文件（见 build.bat 的 /resource:VERSION,version.txt）
-    public const string Website = "starport1116.com";
-
-    public static string ReadVersion()
-    {
-        try
-        {
-            using (Stream s = Assembly.GetExecutingAssembly().GetManifestResourceStream("version.txt"))
-            {
-                if (s == null) return "";
-                using (StreamReader r = new StreamReader(s)) return r.ReadToEnd().Trim();
-            }
-        }
-        catch { return ""; }
-    }
-
     protected override bool ShowWithoutActivation { get { return true; } }
 
     // 点击窗口内容时不激活本窗口，目标软件保持焦点；拖动标题栏照常
@@ -273,9 +210,9 @@ partial class MainForm : Form
             Activate();
             return;
         }
-        if (m.Msg == WM_MOUSEACTIVATE && (m.LParam.ToInt64() & 0xFFFF) == HTCLIENT)
+        if (m.Msg == NativeMethods.WM_MOUSEACTIVATE && (m.LParam.ToInt64() & 0xFFFF) == NativeMethods.HTCLIENT)
         {
-            m.Result = (IntPtr)MA_NOACTIVATE;
+            m.Result = (IntPtr)NativeMethods.MA_NOACTIVATE;
             return;
         }
         base.WndProc(ref m);
@@ -308,8 +245,8 @@ partial class MainForm : Form
         headerClicks = 0;
         try
         {
-            System.Diagnostics.Process.Start("https://" + Website);
-            Flash("正在打开 " + Website, false);
+            System.Diagnostics.Process.Start("https://" + Program.Website);
+            Flash("正在打开 " + Program.Website, false);
         }
         catch { Flash("无法打开浏览器", true); }
     }
@@ -431,15 +368,14 @@ partial class MainForm : Form
         if (DateTokens.HasQty(s))
         {
             // 点卡片时本窗口没被激活，前台仍是目标软件；弹窗关闭后把焦点还给它
-            IntPtr target = IntPtr.Zero;
-            try { target = GetForegroundWindow(); } catch { }  // 还焦点失败不影响复制
+            IntPtr target = NativeMethods.GetForeground();  // 还焦点失败不影响复制
             int qty;
             using (QtyDialog d = new QtyDialog(DateTokens.FillQty(s, "?"), settings.LastQty < 1 ? 2 : settings.LastQty))
             {
                 DialogResult r = d.ShowDialog(this);
                 qty = d.Qty;
                 if (target != IntPtr.Zero && target != Handle)
-                    try { SetForegroundWindow(target); } catch { }
+                    NativeMethods.SetForeground(target);
                 if (r != DialogResult.OK || qty < 1) return;
             }
             settings.LastQty = qty;

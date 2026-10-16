@@ -190,13 +190,12 @@ partial class MainForm
     void ViewImage(Image img)
     {
         if (img == null) return;
-        IntPtr target = IntPtr.Zero;
-        try { target = GetForegroundWindow(); } catch { }
+        IntPtr target = NativeMethods.GetForeground();
         using (ImageViewer v = new ImageViewer(img))
         {
             v.ShowDialog(this);
             if (target != IntPtr.Zero && target != Handle)
-                try { SetForegroundWindow(target); } catch { }
+                NativeMethods.SetForeground(target);
         }
     }
 
@@ -212,12 +211,11 @@ partial class MainForm
     void ClearImages()
     {
         if (stash.Count == 0) return;
-        IntPtr target = IntPtr.Zero;
-        try { target = GetForegroundWindow(); } catch { }
+        IntPtr target = NativeMethods.GetForeground();
         DialogResult r = MessageBox.Show(this, "清空全部 " + stash.Count + " 张参考图片？", "确认清空",
             MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2);
         if (target != IntPtr.Zero && target != Handle)
-            try { SetForegroundWindow(target); } catch { }
+            NativeMethods.SetForeground(target);
         if (r != DialogResult.Yes) return;
 
         foreach (Control c in imageGrid.Controls) c.Dispose();
