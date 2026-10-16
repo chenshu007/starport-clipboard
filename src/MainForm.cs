@@ -11,13 +11,13 @@ using System.Windows.Forms;
 
 // Starport Haiku（固定剪贴板）：点卡片复制中文，点 EN 复制英文；窗口置顶，点击卡片不抢目标软件焦点
 
-class MainForm : Form
+partial class MainForm : Form
 {
     const int WM_MOUSEACTIVATE = 0x21;
     const int MA_NOACTIVATE = 3;
     const int HTCLIENT = 1;
     const int FormW = 380, HeaderH = 80, FooterH = 52, ContextBarH = 34, ImageAreaH = 216;
-    const int MaxVisibleCards = 10, MaxImages = 6, MaxImageSide = 2560;
+    const int MaxVisibleCards = 10;
 
     Phrase undoPhrase;     // 刚删除、还能撤销的词条
     int undoIndex;
@@ -29,7 +29,7 @@ class MainForm : Form
     readonly PhraseStore store;  // phrases.txt：词条、设置、用量统计
     readonly Settings settings;
     readonly UsageStats stats;
-    readonly List<Image> images = new List<Image>();
+    readonly ImageStash stash = new ImageStash();  // 图片暂存区
     readonly Panel header = new Panel();
     readonly Panel list = new Panel();
     readonly Panel contextBar = new Panel();
@@ -158,49 +158,7 @@ class MainForm : Form
         toolTip.SetToolTip(btnContext, "Expand context window");
         contextBar.Controls.Add(btnContext);
 
-        imagePanel.Dock = DockStyle.Bottom;
-        imagePanel.Height = ImageAreaH;
-        imagePanel.Visible = false;
-        imagePanel.AllowDrop = true;
-        imagePanel.DragEnter += OnImageDragEnter;
-        imagePanel.DragDrop += OnImageDragDrop;
-
-        imageHeader.Dock = DockStyle.Top;
-        imageHeader.Height = 36;
-        imageHeader.AllowDrop = true;
-        imageHeader.DragEnter += OnImageDragEnter;
-        imageHeader.DragDrop += OnImageDragDrop;
-        imageHeader.Paint += delegate(object o, PaintEventArgs e)
-        {
-            Theme.Text(e.Graphics, "可拖入图片 · 最多 6 张", Theme.Small,
-                new Rectangle(104, 4, 196, 28), Theme.Muted, TextFormatFlags.Left);
-        };
-        btnPasteImg.Outline = true;
-        btnPasteImg.SetBounds(14, 5, 82, 26);
-        btnPasteImg.Click += delegate { PasteImage(); };
-        btnClearImg.Outline = true;
-        btnClearImg.SetBounds(FormW - 70, 5, 56, 26);
-        btnClearImg.Click += delegate { ClearImages(); };
-        imageHeader.Controls.Add(btnPasteImg);
-        imageHeader.Controls.Add(btnClearImg);
-
-        imageGrid.Dock = DockStyle.Fill;
-        imageGrid.AutoScroll = true;
-        imageGrid.AllowDrop = true;
-        imageGrid.DragEnter += OnImageDragEnter;
-        imageGrid.DragDrop += OnImageDragDrop;
-        imageGrid.Paint += delegate(object o, PaintEventArgs e)
-        {
-            if (images.Count == 0)
-            {
-                Theme.Text(e.Graphics, "暂无参考图片 · 点「粘贴截图」或拖入图片文件", Theme.Small,
-                    new Rectangle(14, 0, imageGrid.Width - 28, imageGrid.Height),
-                    Theme.Muted, TextFormatFlags.HorizontalCenter);
-            }
-        };
-
-        imagePanel.Controls.Add(imageGrid);
-        imagePanel.Controls.Add(imageHeader);
+        BuildImageArea();
 
         footer.Dock = DockStyle.Bottom;
         footer.Height = FooterH;
@@ -281,8 +239,7 @@ class MainForm : Form
     {
         foreach (Control c in imageGrid.Controls) c.Dispose();
         imageGrid.Controls.Clear();
-        foreach (Image img in images) img.Dispose();
-        images.Clear();
+        stash.Clear();
         if (logo != null) { logo.Dispose(); logo = null; }
         base.OnFormClosed(e);
     }
@@ -371,229 +328,6 @@ class MainForm : Form
         UpdatePinButton();
         store.Save();
         Flash(settings.TopMost ? "已置顶" : "已取消置顶", false);
-    }
-
-    void ToggleContext()
-    {
-        contextExpanded = !contextExpanded;
-        imagePanel.Visible = contextExpanded;
-        btnContext.Text = contextExpanded ? "收起上下文" : "扩展上下文窗口";
-        btnContext.Invalidate();
-        if (contextExpanded) RebuildImages();
-        Rebuild();
-    }
-
-    static Image NormalizeImage(Image src)
-    {
-        int w = src.Width, h = src.Height;
-        if (w > MaxImageSide || h > MaxImageSide)
-        {
-            float scale = (float)MaxImageSide / Math.Max(w, h);
-            w = Math.Max(1, (int)Math.Round(w * scale));
-            h = Math.Max(1, (int)Math.Round(h * scale));
-        }
-        Bitmap bmp = new Bitmap(w, h);
-        using (Graphics g = Graphics.FromImage(bmp))
-        {
-            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-            g.SmoothingMode = SmoothingMode.HighQuality;
-            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-            g.DrawImage(src, new Rectangle(0, 0, w, h));
-        }
-        return bmp;
-    }
-
-    bool AddStagedImage(Image raw, out bool evicted)
-    {
-        evicted = false;
-        if (raw == null) return false;
-        Image norm;
-        try { norm = NormalizeImage(raw); }
-        finally { raw.Dispose(); }
-
-        if (images.Count >= MaxImages)
-        {
-            Image old = images[0];
-            images.RemoveAt(0);
-            old.Dispose();
-            evicted = true;
-        }
-        images.Add(norm);
-        return true;
-    }
-
-    void PasteImage()
-    {
-        try
-        {
-            if (!Clipboard.ContainsImage())
-            {
-                Flash("剪贴板里没有图片", true);
-                return;
-            }
-            Image clip = Clipboard.GetImage();
-            if (clip == null)
-            {
-                Flash("剪贴板里没有图片", true);
-                return;
-            }
-            bool evicted;
-            AddStagedImage(clip, out evicted);
-            RebuildImages();
-            Flash(evicted ? "已满 6 张，已移除最早的一张" : "已粘贴截图", false);
-        }
-        catch
-        {
-            Flash("读取剪贴板图片失败", true);
-        }
-    }
-
-    static bool IsAllowedImageExt(string path)
-    {
-        if (string.IsNullOrEmpty(path)) return false;
-        string ext = Path.GetExtension(path);
-        if (ext == null) return false;
-        ext = ext.ToLowerInvariant();
-        return ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".gif";
-    }
-
-    void OnImageDragEnter(object sender, DragEventArgs e)
-    {
-        if (e.Data.GetDataPresent(DataFormats.FileDrop) || e.Data.GetDataPresent(DataFormats.Bitmap))
-            e.Effect = DragDropEffects.Copy;
-        else
-            e.Effect = DragDropEffects.None;
-    }
-
-    void OnImageDragDrop(object sender, DragEventArgs e)
-    {
-        int added = 0;
-        bool ignored = false;
-        bool anyEvicted = false;
-
-        if (e.Data.GetDataPresent(DataFormats.FileDrop))
-        {
-            string[] files = e.Data.GetData(DataFormats.FileDrop) as string[];
-            if (files != null)
-            {
-                foreach (string f in files)
-                {
-                    if (!IsAllowedImageExt(f)) { ignored = true; continue; }
-                    try
-                    {
-                        byte[] bytes = File.ReadAllBytes(f);
-                        using (MemoryStream ms = new MemoryStream(bytes))
-                        {
-                            Image raw = Image.FromStream(ms);
-                            bool ev;
-                            if (AddStagedImage(raw, out ev))
-                            {
-                                added++;
-                                if (ev) anyEvicted = true;
-                            }
-                        }
-                    }
-                    catch { ignored = true; }
-                }
-            }
-        }
-        else if (e.Data.GetDataPresent(DataFormats.Bitmap))
-        {
-            try
-            {
-                Image bmp = e.Data.GetData(DataFormats.Bitmap) as Image;
-                if (bmp != null)
-                {
-                    Image clone = new Bitmap(bmp);
-                    bool ev;
-                    if (AddStagedImage(clone, out ev))
-                    {
-                        added++;
-                        if (ev) anyEvicted = true;
-                    }
-                }
-            }
-            catch { ignored = true; }
-        }
-
-        if (added > 0)
-        {
-            RebuildImages();
-            if (anyEvicted) Flash("已满 6 张，已移除最早的一张", false);
-            else if (ignored) Flash("已添加图片（非支持格式已忽略）", false);
-            else Flash("已添加图片", false);
-        }
-        else if (ignored)
-        {
-            Flash("仅支持拖入 png/jpg/jpeg/bmp/gif 图片", true);
-        }
-    }
-
-    void RebuildImages()
-    {
-        imageGrid.SuspendLayout();
-        imageGrid.AutoScrollPosition = Point.Empty;
-        foreach (Control c in imageGrid.Controls) c.Dispose();
-        imageGrid.Controls.Clear();
-
-        for (int i = 0; i < images.Count; i++)
-        {
-            ImageCard ic = new ImageCard(images[i]);
-            int col = i % 3, row = i / 3;
-            ic.Location = new Point(14 + col * (104 + 10), 6 + row * (78 + 8));
-            ic.ViewRequested += delegate(ImageCard k) { BeginInvoke((MethodInvoker)delegate { ViewImage(k.Img); }); };
-            ic.DeleteRequested += delegate(ImageCard k) { BeginInvoke((MethodInvoker)delegate { RemoveImage(k.Img); }); };
-            ic.AllowDrop = true;
-            ic.DragEnter += OnImageDragEnter;
-            ic.DragDrop += OnImageDragDrop;
-            imageGrid.Controls.Add(ic);
-        }
-
-        btnClearImg.Visible = images.Count > 0;
-        imageGrid.ResumeLayout();
-        imageGrid.Invalidate();
-    }
-
-    void ViewImage(Image img)
-    {
-        if (img == null) return;
-        IntPtr target = IntPtr.Zero;
-        try { target = GetForegroundWindow(); } catch { }
-        using (ImageViewer v = new ImageViewer(img))
-        {
-            v.ShowDialog(this);
-            if (target != IntPtr.Zero && target != Handle)
-                try { SetForegroundWindow(target); } catch { }
-        }
-    }
-
-    void RemoveImage(Image img)
-    {
-        if (images.Remove(img))
-        {
-            img.Dispose();
-            RebuildImages();
-            Flash("已移除图片", false);
-        }
-    }
-
-    void ClearImages()
-    {
-        if (images.Count == 0) return;
-        IntPtr target = IntPtr.Zero;
-        try { target = GetForegroundWindow(); } catch { }
-        DialogResult r = MessageBox.Show(this, "清空全部 " + images.Count + " 张参考图片？", "确认清空",
-            MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2);
-        if (target != IntPtr.Zero && target != Handle)
-            try { SetForegroundWindow(target); } catch { }
-        if (r != DialogResult.Yes) return;
-
-        foreach (Control c in imageGrid.Controls) c.Dispose();
-        imageGrid.Controls.Clear();
-        foreach (Image img in images) img.Dispose();
-        images.Clear();
-        RebuildImages();
-        Flash("已清空图片", false);
     }
 
     public void ShowUsage(IWin32Window owner)
