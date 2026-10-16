@@ -50,7 +50,18 @@
 不需要安装任何工具，Windows 自带的 C# 编译器就够了。把仓库下载到本地，双击 `build.bat`，或在 cmd 里运行：
 
 ```bat
-%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /target:winexe /optimize+ /codepage:65001 /win32icon:app.ico /resource:logo.png,logo.png /resource:VERSION,version.txt /out:StarportHaiku.exe /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll StarportHaiku.cs
+%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /target:winexe /optimize+ /codepage:65001 /win32icon:app.ico /resource:logo.png,logo.png /resource:VERSION,version.txt /out:StarportHaiku.exe /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /recurse:src\*.cs
 ```
 
-每次推送到 `main`，GitHub Actions 都会在 Windows 上编译一次；修改 `VERSION` 文件里的版本号并推送，会自动发布对应的 Release（如 `v1.0.1`）。
+源码都在 `src/` 下，按职责分文件：
+
+| 目录 | 内容 |
+| --- | --- |
+| `src/` | 主窗口 `MainForm`、自动检查 `SelfTest` |
+| `src/Controls/` | 界面控件：配色字体 `Theme`、词条卡片 `Card`、圆角按钮 `PillButton`、图片缩略图 `ImageCard` |
+| `src/Dialogs/` | 对话框：新增/编辑、份数、设置、用量统计、查看图片 |
+| `src/Data/` | 数据：词条 `Phrase`、日期/数量占位符 `DateTokens` |
+
+自动检查：编译后运行 `StarportHaiku.exe --self-test > selftest.log`，全部通过时退出码为 0，结果写在 `selftest.log` 里（覆盖 phrases.txt 读写往返、设置行识别、占位符替换，只在临时目录里读写）。
+
+每次推送到 `main`，GitHub Actions 都会在 Windows 上编译一次并运行自动检查；修改 `VERSION` 文件里的版本号并推送，会自动发布对应的 Release（如 `v1.0.1`）。
