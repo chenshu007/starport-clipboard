@@ -368,7 +368,7 @@ static class SelfTest
 
     // ---------- 被测代码的入口（重构时只改这里） ----------
 
-    static bool IsSettingLine(string line) { return MainForm.IsSettingLine(line); }
+    static bool IsSettingLine(string line) { return Settings.IsSettingLine(line); }
 
     static string WithSuffix(string text, bool on, string suffix) { return MainForm.WithSuffix(text, on, suffix); }
 

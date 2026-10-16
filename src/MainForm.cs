@@ -41,16 +41,12 @@ class MainForm : Form
         "提前退房 {今天}|Early out {today}",
         "加购{数量}份自助早餐 {明天}|{qty} EBF {tomorrow}",
     };
-    int defaultsVersion = 1;
-    int lastQty = 2;
 
     // 用量统计：#stats_since=、#stats_total=、#stats_chars=、#stats_days=日期:次数,…（只保留近 7 天）
     DateTime statsSince = DateTime.MinValue;
     int statsTotal;
     long statsChars;
     readonly Dictionary<string, int> statsDays = new Dictionary<string, int>();
-    Point winPos;          // 上次关闭/拖动后的窗口位置
-    bool hasWinPos;
     Phrase undoPhrase;     // 刚删除、还能撤销的词条
     int undoIndex;
 
@@ -61,6 +57,7 @@ class MainForm : Form
     // 词条文件所在目录：exe 所在文件夹（自检时换成临时目录）
     internal static string DataDir = AppDomain.CurrentDomain.BaseDirectory;
     readonly string file = Path.Combine(DataDir, "phrases.txt");
+    readonly Settings settings = new Settings();
     readonly List<Phrase> phrases = new List<Phrase>();
     readonly List<Image> images = new List<Image>();
     readonly Panel header = new Panel();
@@ -79,10 +76,7 @@ class MainForm : Form
     readonly PillButton btnClearImg = new PillButton("清空");
     readonly PillButton btnAdd = new PillButton("＋ 新增");
     readonly PillButton btnManage = new PillButton("管理");
-    bool topMost = true;
     bool contextExpanded;
-    bool userMode;       // 用户模式：复制时自动加后缀，界面不显示
-    string userSuffix = "";
     bool manage;  // 管理模式：卡片只编辑/删除，不复制
     const string ManageHint = "管理中 · 点卡片编辑";
     readonly System.Windows.Forms.Timer tip = new System.Windows.Forms.Timer();
@@ -133,6 +127,7 @@ class MainForm : Form
 
     public MainForm()
     {
+        RegisterStatsSettings();
         string ver = ReadVersion();
         Text = "Starport Haiku" + (ver.Length > 0 ? " v" + ver : "");
         Font = Theme.Small;
@@ -284,7 +279,7 @@ class MainForm : Form
         ClientSize = new Size(FormW, 300);
         Rectangle wa = Screen.PrimaryScreen.WorkingArea;
         Location = new Point(wa.Right - Width - 20, wa.Top + 60);
-        if (hasWinPos && IsOnScreen(winPos)) Location = winPos;  // 恢复上次的位置
+        if (settings.HasWinPos && IsOnScreen(settings.WinPos)) Location = settings.WinPos;  // 恢复上次的位置
         Rebuild();
 
         try { showMsg = RegisterWindowMessage(InstanceKey); } catch { showMsg = 0; }
@@ -303,9 +298,9 @@ class MainForm : Form
     void RememberPosition()
     {
         if (WindowState != FormWindowState.Normal) return;
-        if (hasWinPos && winPos == Location) return;
-        winPos = Location;
-        hasWinPos = true;
+        if (settings.HasWinPos && settings.WinPos == Location) return;
+        settings.WinPos = Location;
+        settings.HasWinPos = true;
         Save();
     }
 
@@ -391,18 +386,18 @@ class MainForm : Form
 
     void UpdatePinButton()
     {
-        TopMost = topMost;
-        btnPin.Outline = !topMost;
+        TopMost = settings.TopMost;
+        btnPin.Outline = !settings.TopMost;
         btnPin.Invalidate();
-        toolTip.SetToolTip(btnPin, topMost ? "置顶：开" : "置顶：关");
+        toolTip.SetToolTip(btnPin, settings.TopMost ? "置顶：开" : "置顶：关");
     }
 
     void ToggleTopMost()
     {
-        topMost = !topMost;
+        settings.TopMost = !settings.TopMost;
         UpdatePinButton();
         Save();
-        Flash(topMost ? "已置顶" : "已取消置顶", false);
+        Flash(settings.TopMost ? "已置顶" : "已取消置顶", false);
     }
 
     void ToggleContext()
@@ -628,61 +623,13 @@ class MainForm : Form
         Flash("已清空图片", false);
     }
 
-    // 设置行格式：# + 小写英文/下划线 + =，例如 #topmost=1
-    internal static bool IsSettingLine(string line)
-    {
-        int eq = line.IndexOf('=');
-        if (!line.StartsWith("#") || eq < 2) return false;
-        for (int i = 1; i < eq; i++)
-        {
-            char ch = line[i];
-            if (!((ch >= 'a' && ch <= 'z') || ch == '_')) return false;
-        }
-        return true;
-    }
-
     // phrases.txt 每行：中文|English|点击次数|钉住（后三项可省略）
     void ParseLines(string[] lines)
     {
         foreach (string line in lines)
         {
-            if (line.StartsWith("#topmost=")) { topMost = line.Substring(9).Trim() != "0"; continue; }
-            if (line.StartsWith("#user_mode=")) { userMode = line.Substring(11).Trim() == "1"; continue; }
-            if (line.StartsWith("#user_suffix=")) { userSuffix = line.Substring(13).Trim(); continue; }
-            if (line.StartsWith("#last_qty=")) { int.TryParse(line.Substring(10).Trim(), out lastQty); continue; }
-            if (line.StartsWith("#day_cutoff=")) { int.TryParse(line.Substring(12).Trim(), out DateTokens.CutoffHour); continue; }
-            if (line.StartsWith("#defaults=")) { int.TryParse(line.Substring(10).Trim(), out defaultsVersion); continue; }
-            if (line.StartsWith("#stats_since="))
-            {
-                DateTime d;
-                if (DateTime.TryParseExact(line.Substring(13).Trim(), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out d))
-                    statsSince = d;
-                continue;
-            }
-            if (line.StartsWith("#stats_total=")) { int.TryParse(line.Substring(13).Trim(), out statsTotal); continue; }
-            if (line.StartsWith("#stats_chars=")) { long.TryParse(line.Substring(13).Trim(), out statsChars); continue; }
-            if (line.StartsWith("#stats_days="))
-            {
-                foreach (string kv in line.Substring(12).Split(','))
-                {
-                    string[] a = kv.Split(':');
-                    int dayCount;
-                    if (a.Length == 2 && a[0].Trim().Length == 10 && int.TryParse(a[1], out dayCount)) statsDays[a[0].Trim()] = dayCount;
-                }
-                continue;
-            }
-            if (line.StartsWith("#win_pos="))
-            {
-                string[] xy = line.Substring(9).Split(',');
-                int x, y;
-                if (xy.Length == 2 && int.TryParse(xy[0], out x) && int.TryParse(xy[1], out y))
-                {
-                    winPos = new Point(x, y);
-                    hasWinPos = true;
-                }
-                continue;
-            }
-            if (IsSettingLine(line)) continue;  // 未知设置行（如新版本写入的）跳过；「#1203 ...」这类词条照常读取
+            if (settings.TryRead(line)) continue;
+            if (Settings.IsSettingLine(line)) continue;  // 未知设置行（如新版本写入的）跳过；「#1203 ...」这类词条照常读取
             string[] parts = line.Split('|');
             string zh = parts[0].Trim();
             if (zh.Length == 0) continue;
@@ -712,10 +659,10 @@ class MainForm : Form
             }
             else ParseLines(Defaults);
             if (recovered) { Save(); Flash("词条文件为空，已从备份恢复", true); }
-            if (!File.Exists(file)) { defaultsVersion = DefaultsVersion; Save(); }
+            if (!File.Exists(file)) { settings.DefaultsVersion = DefaultsVersion; Save(); }
             else
             {
-                if (defaultsVersion < 2)
+                if (settings.DefaultsVersion < 2)
                 {
                     foreach (string d in DefaultsV2)
                     {
@@ -723,7 +670,7 @@ class MainForm : Form
                         if (!Exists(parts[0], null)) phrases.Add(new Phrase(parts[0], parts[1], 0));
                     }
                 }
-                if (defaultsVersion < 3)
+                if (settings.DefaultsVersion < 3)
                 {
                     // v1.4 的固定 2 份 EBF 改为复制时输入份数（保留点击次数）
                     foreach (Phrase p in phrases)
@@ -733,9 +680,9 @@ class MainForm : Form
                             p.En = "{qty} EBF {tomorrow}";
                         }
                 }
-                if (defaultsVersion < DefaultsVersion)
+                if (settings.DefaultsVersion < DefaultsVersion)
                 {
-                    defaultsVersion = DefaultsVersion;
+                    settings.DefaultsVersion = DefaultsVersion;
                     Save();
                 }
                 HideFile();  // 旧版本留下的可见 phrases.txt 也设为隐藏
@@ -759,6 +706,42 @@ class MainForm : Form
 
         SortPhrases(true);
         BackupDaily();
+    }
+
+    // 统计的四个设置行：只有开始统计后（stats_since 有值）才写出
+    void RegisterStatsSettings()
+    {
+        settings.Register("stats_since",
+            delegate(string v)
+            {
+                DateTime d;
+                if (DateTime.TryParseExact(v.Trim(), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out d))
+                    statsSince = d;
+            },
+            delegate { return statsSince != DateTime.MinValue ? statsSince.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) : null; });
+        settings.Register("stats_total",
+            delegate(string v) { int.TryParse(v.Trim(), out statsTotal); },
+            delegate { return statsSince != DateTime.MinValue ? statsTotal.ToString() : null; });
+        settings.Register("stats_chars",
+            delegate(string v) { long.TryParse(v.Trim(), out statsChars); },
+            delegate { return statsSince != DateTime.MinValue ? statsChars.ToString() : null; });
+        settings.Register("stats_days",
+            delegate(string v)
+            {
+                foreach (string kv in v.Split(','))
+                {
+                    string[] a = kv.Split(':');
+                    int dayCount;
+                    if (a.Length == 2 && a[0].Trim().Length == 10 && int.TryParse(a[1], out dayCount)) statsDays[a[0].Trim()] = dayCount;
+                }
+            },
+            delegate
+            {
+                if (statsSince == DateTime.MinValue) return null;
+                List<string> kv = new List<string>();
+                foreach (KeyValuePair<string, int> d in statsDays) kv.Add(d.Key + ":" + d.Value);
+                return string.Join(",", kv.ToArray());
+            });
     }
 
     static string DayKey(DateTime d) { return d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture); }
@@ -872,22 +855,7 @@ class MainForm : Form
         try
         {
             List<string> lines = new List<string>();
-            lines.Add("#topmost=" + (topMost ? "1" : "0"));
-            lines.Add("#user_mode=" + (userMode ? "1" : "0"));
-            lines.Add("#user_suffix=" + userSuffix);
-            lines.Add("#day_cutoff=" + DateTokens.CutoffHour);
-            lines.Add("#last_qty=" + lastQty);
-            lines.Add("#defaults=" + defaultsVersion);
-            if (hasWinPos) lines.Add("#win_pos=" + winPos.X + "," + winPos.Y);
-            if (statsSince != DateTime.MinValue)
-            {
-                lines.Add("#stats_since=" + statsSince.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
-                lines.Add("#stats_total=" + statsTotal);
-                lines.Add("#stats_chars=" + statsChars);
-                List<string> kv = new List<string>();
-                foreach (KeyValuePair<string, int> d in statsDays) kv.Add(d.Key + ":" + d.Value);
-                lines.Add("#stats_days=" + string.Join(",", kv.ToArray()));
-            }
+            settings.WriteTo(lines);
             foreach (Phrase p in phrases)
                 lines.Add(p.Zh + "|" + p.En + "|" + p.Count + (p.Pinned ? "|1" : ""));
             byte[] data = new UTF8Encoding(false).GetBytes(string.Join("\r\n", lines.ToArray()) + "\r\n");
@@ -994,7 +962,7 @@ class MainForm : Form
             IntPtr target = IntPtr.Zero;
             try { target = GetForegroundWindow(); } catch { }  // 还焦点失败不影响复制
             int qty;
-            using (QtyDialog d = new QtyDialog(DateTokens.FillQty(s, "?"), lastQty < 1 ? 2 : lastQty))
+            using (QtyDialog d = new QtyDialog(DateTokens.FillQty(s, "?"), settings.LastQty < 1 ? 2 : settings.LastQty))
             {
                 DialogResult r = d.ShowDialog(this);
                 qty = d.Qty;
@@ -1002,14 +970,14 @@ class MainForm : Form
                     try { SetForegroundWindow(target); } catch { }
                 if (r != DialogResult.OK || qty < 1) return;
             }
-            lastQty = qty;
+            settings.LastQty = qty;
             s = DateTokens.FillQty(s, qty.ToString());
         }
         for (int n = 0; n < 5; n++)
         {
             try
             {
-                string text = WithSuffix(s, userMode, userSuffix);
+                string text = WithSuffix(s, settings.UserMode, settings.UserSuffix);
                 Clipboard.SetText(text);
                 p.Count++;
                 RecordCopy(text.Length);
@@ -1146,7 +1114,7 @@ class MainForm : Form
             {
                 foreach (string line in File.ReadAllLines(d.FileName, Encoding.UTF8))
                 {
-                    if (line.Trim().Length == 0 || IsSettingLine(line)) continue;
+                    if (line.Trim().Length == 0 || Settings.IsSettingLine(line)) continue;
                     string[] parts = line.Split('|');
                     string zh = parts[0].Trim();
                     if (zh.Length == 0) continue;
@@ -1188,11 +1156,11 @@ class MainForm : Form
 
     void OpenSettings()
     {
-        using (SettingsDialog d = new SettingsDialog(this, userMode, userSuffix, DateTokens.CutoffHour))
+        using (SettingsDialog d = new SettingsDialog(this, settings.UserMode, settings.UserSuffix, DateTokens.CutoffHour))
         {
             if (d.ShowDialog(this) != DialogResult.OK) return;
-            userMode = d.UserMode;
-            userSuffix = d.Suffix;
+            settings.UserMode = d.UserMode;
+            settings.UserSuffix = d.Suffix;
             DateTokens.CutoffHour = d.CutoffHour;
             Rebuild();  // 分界时间变了，卡片上的日期可能要更新
             Save();
