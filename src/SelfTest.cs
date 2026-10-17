@@ -27,6 +27,7 @@ static class SelfTest
             RoundTrip(root);
             Integrity(root);
             Encryption(root);
+            SharedFolder(root);
         }
         catch (Exception ex) { Check("没有未处理的异常", false, ex.ToString()); }
         finally
@@ -581,6 +582,121 @@ static class SelfTest
             Check("加密时更小的文件同样不覆盖备份", SameBytes(encBak, File.ReadAllBytes(bak)), null);
         }
         finally { FileCrypto.NewIterations = saved; }
+    }
+
+    // ---------- 共享文件夹防护：输错密码不写文件、防篡改、本机多一份备份 ----------
+
+    static void SharedFolder(string root)
+    {
+        Section("共享文件夹防护");
+        int saved = FileCrypto.NewIterations;
+        FileCrypto.NewIterations = 1000;
+        try
+        {
+            byte[] canonical = Utf8(Canonical, "\r\n", false);
+            const string Pwd = "开门 Sesame 123";
+            int tries;
+
+            // 输错密码、不输密码：一律不写文件
+            string dir = NewDir(root, "wrong-password");
+            string file = Path.Combine(dir, "phrases.txt"), bak = Path.Combine(dir, "phrases.bak");
+            File.WriteAllBytes(file, canonical);
+            Open(dir).SetPassword(Pwd);
+            byte[] enc = File.ReadAllBytes(file), encBak = File.ReadAllBytes(bak);
+            PhraseStore s = new PhraseStore(dir);
+            bool opened = Unlock(s, new string[] { "a", "b", "c" }, out tries);
+            s.Load();
+            s.Save();
+            Check("连续输错后放弃：不打开、不写文件", !opened && tries == 4 &&
+                SameBytes(enc, File.ReadAllBytes(file)) && SameBytes(encBak, File.ReadAllBytes(bak)), null);
+
+            // 词条文件和备份都坏到没法核对密码：不能随便接受一个密码去写默认词条
+            dir = NewDir(root, "unverifiable");
+            file = Path.Combine(dir, "phrases.txt");
+            bak = Path.Combine(dir, "phrases.bak");
+            byte[] broken = Encoding.ASCII.GetBytes("#encrypted=1\r\n#kdf=pbkdf2-sha256,1000,\r\n");
+            File.WriteAllBytes(file, broken);
+            File.WriteAllBytes(bak, broken);
+            s = new PhraseStore(dir);
+            opened = Unlock(s, new string[] { "随便一个密码" }, out tries);
+            s.Load();
+            s.Save();
+            Check("无法核对密码时不打开、不写文件", !opened && SameBytes(broken, File.ReadAllBytes(file)) && SameBytes(broken, File.ReadAllBytes(bak)), null);
+
+            // 密文被改动：校验不过，不当成词条，从备份恢复
+            dir = NewDir(root, "tampered");
+            file = Path.Combine(dir, "phrases.txt");
+            File.WriteAllBytes(file, canonical);
+            Open(dir).SetPassword(Pwd);
+            string text = Encoding.ASCII.GetString(File.ReadAllBytes(file));
+            int at = text.IndexOf("#data=") + 20;
+            text = text.Substring(0, at) + (text[at] == 'A' ? 'B' : 'A') + text.Substring(at + 1);
+            File.SetAttributes(file, FileAttributes.Normal);
+            File.WriteAllText(file, text, Encoding.ASCII);
+            s = new PhraseStore(dir);
+            Check("密文被改动：用备份核对密码", Unlock(s, new string[] { Pwd }, out tries), null);
+            DateTokens.CutoffHour = 0;
+            s.Load();
+            s.RemovePassword();
+            Check("密文被改动：从备份恢复原内容", SameBytes(canonical, File.ReadAllBytes(file)), null);
+
+            // 开了密码后，词条文件被换成明文：不读这些内容，从加密备份恢复
+            dir = NewDir(root, "replaced-plain");
+            file = Path.Combine(dir, "phrases.txt");
+            File.WriteAllBytes(file, canonical);
+            Open(dir).SetPassword(Pwd);
+            File.SetAttributes(file, FileAttributes.Normal);
+            File.WriteAllBytes(file, Utf8(new string[] { "#defaults=3", "被换进来的词条|Fake|99" }, "\r\n", false));
+            s = new PhraseStore(dir);
+            Unlock(s, new string[] { Pwd }, out tries);
+            DateTokens.CutoffHour = 0;
+            s.Load();
+            Check("加密时被换成明文的文件不读入", s.Phrases.Count == 5 && !s.Exists("被换进来的词条", null), "词条数 " + s.Phrases.Count);
+
+            // 本机（%APPDATA%）再存一份备份
+            dir = NewDir(root, "local-backup");
+            string local = Path.Combine(root, "local-backup-appdata");
+            file = Path.Combine(dir, "phrases.txt");
+            bak = Path.Combine(dir, "phrases.bak");
+            string localBak = Path.Combine(local, "phrases.bak");
+            File.WriteAllBytes(file, canonical);
+            OpenWithLocal(dir, local);
+            Check("本机也备份一份", File.Exists(localBak) && SameBytes(canonical, File.ReadAllBytes(localBak)), null);
+
+            // 同事把共享文件夹里的 phrases.txt 和 phrases.bak 都删了：从本机备份恢复
+            File.SetAttributes(file, FileAttributes.Normal);
+            File.Delete(file);
+            File.SetAttributes(bak, FileAttributes.Normal);
+            File.Delete(bak);
+            PhraseStore restored = OpenWithLocal(dir, local);
+            Check("共享文件夹里的文件都被删：从本机备份恢复", restored.Phrases.Count == 5 && SameBytes(canonical, File.ReadAllBytes(file)),
+                "词条数 " + restored.Phrases.Count);
+
+            // 开了密码：本机备份也加密；共享文件夹里都被删时，用本机备份核对密码并恢复
+            restored.SetPassword(Pwd);
+            byte[] encLocal = File.ReadAllBytes(localBak);
+            Check("开密码后本机备份也加密", FileCrypto.IsEncrypted(encLocal) && !Contains(encLocal, "港币"), null);
+            File.SetAttributes(file, FileAttributes.Normal);
+            File.Delete(file);
+            File.SetAttributes(bak, FileAttributes.Normal);
+            File.Delete(bak);
+            s = new PhraseStore(dir, local);
+            Check("文件都被删时用本机备份核对密码", Unlock(s, new string[] { Pwd }, out tries) && tries == 1, "尝试次数 " + tries);
+            DateTokens.CutoffHour = 0;
+            s.Load();
+            Check("加密时从本机备份恢复", s.Phrases.Count == 5, "词条数 " + s.Phrases.Count);
+            s.RemovePassword();
+            Check("关闭密码后本机备份还原为明文", SameBytes(canonical, File.ReadAllBytes(localBak)), null);
+        }
+        finally { FileCrypto.NewIterations = saved; }
+    }
+
+    static PhraseStore OpenWithLocal(string dir, string local)
+    {
+        DateTokens.CutoffHour = 0;
+        PhraseStore store = new PhraseStore(dir, local);
+        store.Load();
+        return store;
     }
 
     // ---------- 被测代码的入口（重构时只改这里） ----------

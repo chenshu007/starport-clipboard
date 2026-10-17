@@ -42,7 +42,9 @@ class PhraseStore
     // 读写出错时的提示文字（界面上用红字显示）
     public event Action<string> Error;
 
-    public PhraseStore(string dir)
+    public PhraseStore(string dir) : this(dir, null) { }
+
+    public PhraseStore(string dir, string localBackupDir)
     {
         Stats = new UsageStats(Settings);  // 统计的设置行登记在其他设置之后
         file = Path.Combine(dir, "phrases.txt");
