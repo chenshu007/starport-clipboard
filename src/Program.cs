@@ -13,12 +13,18 @@ static class Program
     // 也用作「已在运行，把窗口调到前面」的窗口消息名
     public static string InstanceKey;
 
-    static string MakeInstanceKey()
+    // exe 所在文件夹的编号：路径的 FNV-1a 哈希，跨进程稳定
+    static string FolderId()
     {
         string path = AppDomain.CurrentDomain.BaseDirectory.ToLowerInvariant();
-        uint h = 2166136261;  // FNV-1a，跨进程稳定
+        uint h = 2166136261;
         foreach (char ch in path) { h ^= ch; h *= 16777619; }
-        return "StarportFixedClipboard_" + h.ToString("X8");  // 沿用旧名，新旧版本放同一文件夹也不会同时运行
+        return h.ToString("X8");
+    }
+
+    static string MakeInstanceKey()
+    {
+        return "StarportFixedClipboard_" + FolderId();  // 沿用旧名，新旧版本放同一文件夹也不会同时运行
     }
 
     [STAThread]
@@ -37,7 +43,8 @@ static class Program
         }
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
-        PhraseStore store = new PhraseStore(AppDomain.CurrentDomain.BaseDirectory);  // 词条文件和 exe 放在同一文件夹
+        // 词条文件和 exe 放在同一文件夹；本机 %APPDATA% 里再存一份备份
+        PhraseStore store = new PhraseStore(AppDomain.CurrentDomain.BaseDirectory, PhraseStore.LocalBackupDirFor(FolderId()));
         if (!store.Unlock(PasswordDialog.AskToUnlock)) return 0;  // 开了启动密码却不输：直接退出，不碰文件
         Application.Run(new MainForm(store));
         GC.KeepAlive(mutex);

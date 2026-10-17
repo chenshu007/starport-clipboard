@@ -425,6 +425,13 @@ static class SelfTest
         Same("最后一行没有换行：照常读入", "手写的最后一行", hand.Phrases.Count == 2 ? hand.Phrases[1].Zh : null);
         Check("最后一行没有换行：不从备份恢复、不改写文件", SameBytes(handEdited, File.ReadAllBytes(file)), null);
 
+        // 只有一条词条、最后没有换行、也没有备份：这条照常保留
+        dir = NewDir(root, "single-no-newline");
+        file = Path.Combine(dir, "phrases.txt");
+        File.WriteAllBytes(file, new UTF8Encoding(false).GetBytes("#defaults=3\r\n唯一的一条|Only one"));
+        hand = Open(dir);
+        Same("只有一条且没有换行、没有备份：保留这条", "唯一的一条", hand.Phrases.Count == 1 ? hand.Phrases[0].Zh : null);
+
         // M1：phrases.txt 存在但为空、也没有备份：写入完整的 10 条默认词条
         dir = NewDir(root, "empty-no-backup");
         file = Path.Combine(dir, "phrases.txt");
